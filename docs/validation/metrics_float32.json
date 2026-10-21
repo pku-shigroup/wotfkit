@@ -1,0 +1,146 @@
+{
+  "dtype": "float32",
+  "reference_dtype": "float64",
+  "devices": [
+    "cpu:0"
+  ],
+  "shape": [
+    17,
+    15,
+    17
+  ],
+  "spacing_um": [
+    0.35,
+    0.25,
+    0.22
+  ],
+  "wavelength_um": 0.53,
+  "n_medium": 1.33,
+  "na_detection": 0.6,
+  "source_bins_yx": [
+    [
+      0,
+      0
+    ],
+    [
+      1,
+      2
+    ],
+    [
+      -1,
+      1
+    ]
+  ],
+  "source_weights": [
+    1,
+    0.6,
+    0.3
+  ],
+  "specimen": "five axial layers, separate negative real/imaginary offset Gaussians; see make_case",
+  "pupil_phase": "0.25*(kx/cutoff)^2+0.13*ky/cutoff radians; cutoff=2*pi*NA/wavelength",
+  "focus_z_um": [
+    -1.4,
+    -1.0499999999999998,
+    -0.7,
+    -0.35,
+    0.0,
+    0.35,
+    0.7,
+    1.0499999999999998,
+    1.4
+  ],
+  "background": 1.9,
+  "max_abs_linear_contrast": 0.0002475876558594375,
+  "methods": {
+    "fft": {
+      "versus_linear": {
+        "relative_l2": 5.148793397943609e-07,
+        "rmse": 2.5300501209763553e-11,
+        "max_abs": 1.0769742806808729e-10
+      },
+      "versus_born": {
+        "relative_l2": 0.00015127299648923963,
+        "rmse": 7.43249731443098e-09,
+        "max_abs": 4.089953751839964e-08
+      },
+      "transfer_dtype": "complex64",
+      "prediction_dtype": "float32"
+    },
+    "ewald_finite": {
+      "versus_linear": {
+        "relative_l2": 5.069500271262781e-07,
+        "rmse": 2.491086509651118e-11,
+        "max_abs": 1.223673979527419e-10
+      },
+      "versus_born": {
+        "relative_l2": 0.00015116441176315284,
+        "rmse": 7.427162220238637e-09,
+        "max_abs": 4.085588177271454e-08
+      },
+      "transfer_dtype": "complex64",
+      "prediction_dtype": "float32"
+    },
+    "ewald_linear": {
+      "versus_linear": {
+        "relative_l2": 0.081855842630035,
+        "rmse": 4.022289661718715e-06,
+        "max_abs": 4.026101897693866e-05
+      },
+      "versus_born": {
+        "relative_l2": 0.08180010819720382,
+        "rmse": 4.0190853530102964e-06,
+        "max_abs": 4.02246367364967e-05
+      },
+      "transfer_dtype": "complex64",
+      "prediction_dtype": "float32"
+    }
+  },
+  "axial_convergence": [
+    {
+      "nz": 17,
+      "dkz": 1.055997530618418,
+      "relative_l2": 0.081855842630035,
+      "rmse": 4.022289661718715e-06,
+      "max_abs": 4.026101897693866e-05
+    },
+    {
+      "nz": 33,
+      "dkz": 0.5439987278943366,
+      "relative_l2": 0.027447877548757812,
+      "rmse": 1.3487530095986084e-06,
+      "max_abs": 1.208810364119404e-05
+    },
+    {
+      "nz": 65,
+      "dkz": 0.27618396954635543,
+      "relative_l2": 0.0070075379356849855,
+      "rmse": 3.443413015757673e-07,
+      "max_abs": 3.1970289558141767e-06
+    },
+    {
+      "nz": 129,
+      "dkz": 0.13916246527529538,
+      "relative_l2": 0.0018407717045886315,
+      "rmse": 9.045312782883053e-08,
+      "max_abs": 8.317024469345151e-07
+    }
+  ],
+  "amplitude_scaling": [
+    {
+      "scale": 1.0,
+      "quadratic_residual_l2": 3.558674653996732e-07,
+      "relative_to_linear": 0.00015117266909262517
+    },
+    {
+      "scale": 0.5,
+      "quadratic_residual_l2": 8.89668663499203e-08,
+      "relative_to_linear": 7.558633454631428e-05
+    },
+    {
+      "scale": 0.25,
+      "quadratic_residual_l2": 2.2241716587478362e-08,
+      "relative_to_linear": 3.7793167273154226e-05
+    }
+  ],
+  "boundary": "periodic xy; finite z specimen; padded convolution and central focus ROI"
+}

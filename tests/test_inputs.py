@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from examples.validate_born import make_case
-from wotf import circular_pupil, frequency_axes, predict_contrast, wotf_ewald, wotf_fft
+from wotf import circular_pupil, precision, predict_contrast, wavevector_axes, wotf_ewald, wotf_fft
 
 
 def test_import_does_not_change_jax_x64_configuration():
@@ -25,7 +25,7 @@ def test_explicit_precision_with_external_x64_disabled(dtype, complex_name):
     # disabled would already have lost precision, which no cast can recover.
     optics = optics | {"source": np.asarray(optics["source"]), "pupil": np.asarray(optics["pupil"])}
     with jax.enable_x64(False):
-        axes = frequency_axes(fr.shape, spacing, dtype=dtype)
+        axes = wavevector_axes(fr.shape, spacing, dtype=dtype)
         assert all(str(a.dtype) == dtype for a in axes)
         assert not jax.config.x64_enabled
         pupil = circular_pupil(*axes[1:], wavelength=0.53, na=0.6, dtype=dtype)
@@ -42,15 +42,55 @@ def test_explicit_precision_with_external_x64_disabled(dtype, complex_name):
 
 
 @pytest.mark.parametrize("shape,spacing", [((4, 7, 9), (0.7, 0.21, 0.17)), ((5, 8, 10), (0.4, 0.2, 0.3))])
-def test_frequency_axes_are_unshifted_and_ordered_zyx(shape, spacing):
-    for actual, n, d in zip(frequency_axes(shape, spacing), shape, spacing):
-        np.testing.assert_allclose(actual, np.fft.fftfreq(n, d), rtol=1e-15, atol=0)
+def test_wavevector_axes_are_angular_unshifted_and_ordered_zyx(shape, spacing):
+    for actual, n, d in zip(wavevector_axes(shape, spacing), shape, spacing):
+        np.testing.assert_allclose(actual, 2 * np.pi * np.fft.fftfreq(n, d), rtol=1e-15, atol=0)
 
 
-@pytest.mark.parametrize("bad", ["float16", "complex128", None])
+@pytest.mark.parametrize("bad", ["float16", "complex128"])
 def test_reject_unsupported_precision(bad):
     with pytest.raises(ValueError, match="dtype"):
-        frequency_axes((3, 5, 7), (1, 1, 1), dtype=bad)
+        wavevector_axes((3, 5, 7), (1, 1, 1), dtype=bad)
+
+
+@pytest.mark.parametrize("dtype,complex_name", [("float32", "complex64"), ("float64", "complex128")])
+def test_precision_block_controls_whole_pipeline(dtype, complex_name):
+    fr, fi, spacing, optics = make_case()
+    with jax.enable_x64(False):
+        with precision(dtype):
+            assert jax.config.x64_enabled == (dtype == "float64")
+            assert str(jnp.zeros(1).dtype) == dtype
+            axes = wavevector_axes(fr.shape, spacing)
+            assert all(str(a.dtype) == dtype for a in axes)
+            pupil = circular_pupil(*axes[1:], wavelength=0.53, na=0.6)
+            assert str(pupil.dtype) == complex_name
+            for method in (wotf_fft, wotf_ewald):
+                h = method(fr.shape, spacing, **optics)
+                assert all(str(a.dtype) == complex_name for a in h)
+                predicted = predict_contrast(fr, fi, *h)
+                assert str(predicted.dtype) == dtype
+                expected_h = method(fr.shape, spacing, **optics, dtype=dtype)
+                np.testing.assert_array_equal(predicted, predict_contrast(fr, fi, *expected_h, dtype=dtype))
+        assert not jax.config.x64_enabled
+        assert str(wavevector_axes(fr.shape, spacing)[0].dtype) == "float64"
+        assert not jax.config.x64_enabled
+
+
+def test_nested_precision_override_and_exception_restore():
+    shape, spacing = (3, 5, 7), (1, 1, 1)
+    with jax.enable_x64(False):
+        with precision("float32"):
+            assert str(wavevector_axes(shape, spacing, dtype="float64")[0].dtype) == "float64"
+            assert not jax.config.x64_enabled
+            with pytest.raises(RuntimeError):
+                with precision("float64"):
+                    assert jax.config.x64_enabled
+                    assert str(wavevector_axes(shape, spacing)[0].dtype) == "float64"
+                    raise RuntimeError("restore the outer precision")
+            assert not jax.config.x64_enabled
+            assert str(wavevector_axes(shape, spacing)[0].dtype) == "float32"
+        assert not jax.config.x64_enabled
+        assert str(wavevector_axes(shape, spacing)[0].dtype) == "float64"
 
 
 @pytest.mark.parametrize("method", [wotf_fft, wotf_ewald])

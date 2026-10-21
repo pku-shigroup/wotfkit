@@ -31,13 +31,13 @@ def make_case(shape=(17, 15, 17), *, dtype="float64", aberrated=True):
         fi = -0.004 * jnp.exp(-((X + 0.2) ** 2 / 0.35 + (Y - 0.13) ** 2 / 0.7 + Z**2 / 0.2))
         occupied = jnp.abs(jnp.arange(nz) - nz // 2) <= 2
         fr, fi = fr * occupied[:, None, None], fi * occupied[:, None, None]
-        fy = jnp.fft.fftfreq(ny, spacing[1], dtype=real)
-        fx = jnp.fft.fftfreq(nx, spacing[2], dtype=real)
-        FY, FX = jnp.meshgrid(fy, fx, indexing="ij")
+        ky = 2 * jnp.pi * jnp.fft.fftfreq(ny, spacing[1], dtype=real)
+        kx = 2 * jnp.pi * jnp.fft.fftfreq(nx, spacing[2], dtype=real)
+        KY, KX = jnp.meshgrid(ky, kx, indexing="ij")
         wavelength, n_medium, na = 0.53, 1.33, 0.6
-        cutoff = na / wavelength
-        phase = 0.25 * (FX / cutoff) ** 2 + 0.13 * FY / cutoff if aberrated else jnp.zeros_like(FX)
-        pupil = (FX**2 + FY**2 <= cutoff**2) * jnp.exp(1j * phase)
+        cutoff = 2 * jnp.pi * na / wavelength
+        phase = 0.25 * (KX / cutoff) ** 2 + 0.13 * KY / cutoff if aberrated else jnp.zeros_like(KX)
+        pupil = (KX**2 + KY**2 <= cutoff**2) * jnp.exp(1j * phase)
         source = jnp.zeros((ny, nx), real).at[0, 0].set(1).at[1, 2].set(0.6).at[-1, 1].set(0.3)
         optics = dict(wavelength=wavelength, n_medium=n_medium, source=source, pupil=pupil)
         return fr, fi, spacing, optics
@@ -53,7 +53,7 @@ def born_stack(
     Transverse quadrature is periodic; the z integral is a finite slice sum.
     The medium Green function is exp(i km r)/(4 pi r), and F=k0^2(nm^2-n^2),
     hence the scattered field is MINUS G*(F*u_inc). Its forward angular
-    spectrum factor is 1/(4 pi i w), w=sqrt((nm/lambda0)^2-fx^2-fy^2).
+    spectrum factor is 1/(2 i kz), kz=sqrt((2*pi*nm/lambda0)^2-kx^2-ky^2).
 
     Returned linear/Born intensities are absolute weighted intensities.
     Contrasts are also accumulated directly, avoiding subtraction of a large
@@ -74,14 +74,15 @@ def born_stack(
         y = (jnp.arange(ny, dtype=real) - ny // 2) * dy
         x = (jnp.arange(nx, dtype=real) - nx // 2) * dx
         Y, X = jnp.meshgrid(y, x, indexing="ij")
-        fy, fx = jnp.fft.fftfreq(ny, dy, dtype=real), jnp.fft.fftfreq(nx, dx, dtype=real)
-        radial2 = fy[:, None] ** 2 + fx[None, :] ** 2
-        fm = jnp.asarray(n_medium / wavelength, real)
+        ky = 2 * jnp.pi * jnp.fft.fftfreq(ny, dy, dtype=real)
+        kx = 2 * jnp.pi * jnp.fft.fftfreq(nx, dx, dtype=real)
+        radial2 = ky[:, None] ** 2 + kx[None, :] ** 2
+        km = jnp.asarray(2 * jnp.pi * n_medium / wavelength, real)
         active = (source > 0) | (jnp.abs(pupil) > 0)
-        if bool(jnp.any(active & (radial2 >= fm**2))):
+        if bool(jnp.any(active & (radial2 >= km**2))):
             raise ValueError("reference requires propagating active modes")
-        w = jnp.sqrt(jnp.maximum(fm**2 - radial2, 0))
-        safe_w = jnp.where(w > 0, w, 1)
+        kz = jnp.sqrt(jnp.maximum(km**2 - radial2, 0))
+        safe_kz = jnp.where(kz > 0, kz, 1)
         z_focus = jnp.asarray(z_focus, real)
         z_exit = z[-1] + dz  # strictly beyond every specimen slice
         sy, sx = jnp.nonzero(source > 0)
@@ -93,18 +94,18 @@ def born_stack(
         def integrate():
             def illuminate(i, accumulated):
                 cross, power = accumulated
-                ws = w[sy[i], sx[i]]
-                lateral = jnp.exp(2j * jnp.pi * (fy[sy[i]] * Y + fx[sx[i]] * X))
+                source_kz = kz[sy[i], sx[i]]
+                lateral = jnp.exp(1j * (ky[sy[i]] * Y + kx[sx[i]] * X))
 
                 def scatter_slice(exit_spectrum, layer):
                     z_sample, f_slice = layer
-                    driving = f_slice * lateral * jnp.exp(2j * jnp.pi * ws * z_sample)
+                    driving = f_slice * lateral * jnp.exp(1j * source_kz * z_sample)
                     # Continuous transverse transform -> dx dy FFT; inverse
                     # contributes 1/(dx dy), not a second voxel-volume factor.
                     driving_spectrum = dx * dy * jnp.fft.fft2(jnp.fft.ifftshift(driving))
                     contribution = (
-                        driving_spectrum * dz / (4j * jnp.pi * safe_w)
-                        * jnp.exp(2j * jnp.pi * w * (z_exit - z_sample))
+                        driving_spectrum * dz / (2j * safe_kz)
+                        * jnp.exp(1j * kz * (z_exit - z_sample))
                     )
                     return exit_spectrum + contribution, None
 
@@ -113,14 +114,14 @@ def born_stack(
                 )
                 spectrum = (
                     pupil * exit_spectrum
-                    * jnp.exp(2j * jnp.pi * w * (z_focus[:, None, None] - z_exit))
+                    * jnp.exp(1j * kz * (z_focus[:, None, None] - z_exit))
                 )
                 scattered = jnp.fft.fftshift(
                     jnp.fft.ifft2(spectrum), axes=(-2, -1)
                 ) / (dx * dy)
                 reference = (
                     pupil[sy[i], sx[i]] * lateral
-                    * jnp.exp(2j * jnp.pi * ws * z_focus[:, None, None])
+                    * jnp.exp(1j * source_kz * z_focus[:, None, None])
                 )
                 weight = source[sy[i], sx[i]]
                 cross = cross + weight * 2 * jnp.real(jnp.conj(reference) * scattered)
@@ -154,7 +155,7 @@ def error_metrics(prediction, reference):
 
 def run_validation(dtype="float64", output=Path("artifacts/born-float64")):
     # Library functions appear only on the prediction side of this comparison.
-    from wotf import predict_contrast, wotf_ewald, wotf_fft
+    from wotf import precision, predict_contrast, wotf_ewald, wotf_fft
 
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
@@ -170,8 +171,9 @@ def run_validation(dtype="float64", output=Path("artifacts/born-float64")):
         }
         predictions, metrics = {}, {}
         for name, (method, options) in methods.items():
-            h = method(fr.shape, spacing, **optics, **options, dtype=dtype)
-            predictions[name] = predict_contrast(fr, fi, *h, dtype=dtype)[roi]
+            with precision(dtype):
+                h = method(fr.shape, spacing, **optics, **options)
+                predictions[name] = predict_contrast(fr, fi, *h)[roi]
             metrics[name] = dict(
                 versus_linear=error_metrics(predictions[name], reference["linear_contrast"]),
                 versus_born=error_metrics(predictions[name], reference["born_contrast"]),
@@ -182,10 +184,11 @@ def run_validation(dtype="float64", output=Path("artifacts/born-float64")):
         convergence = []
         for nz in (17, 33, 65, 129):
             fr_pad, fi_pad, _, options = make_case((nz, fr.shape[1], fr.shape[2]))
-            h = wotf_ewald(fr_pad.shape, spacing, **options, axial="linear", dtype=dtype)
-            start = nz // 2 - 4
-            prediction = predict_contrast(fr_pad, fi_pad, *h, dtype=dtype)[start:start + 9]
-            convergence.append(dict(nz=nz, dfz=1 / (nz * spacing[0]), **error_metrics(prediction, reference["linear_contrast"])))
+            with precision(dtype):
+                h = wotf_ewald(fr_pad.shape, spacing, **options, axial="linear")
+                start = nz // 2 - 4
+                prediction = predict_contrast(fr_pad, fi_pad, *h)[start:start + 9]
+            convergence.append(dict(nz=nz, dkz=float(2 * jnp.pi / (nz * spacing[0])), **error_metrics(prediction, reference["linear_contrast"])))
 
         amplitude = []
         for scale in (1.0, 0.5, 0.25):
@@ -202,7 +205,7 @@ def run_validation(dtype="float64", output=Path("artifacts/born-float64")):
             n_medium=optics["n_medium"], na_detection=0.6,
             source_bins_yx=[[0, 0], [1, 2], [-1, 1]], source_weights=[1, 0.6, 0.3],
             specimen="five axial layers, separate negative real/imaginary offset Gaussians; see make_case",
-            pupil_phase="0.25*(fx/cutoff)^2+0.13*fy/cutoff radians",
+            pupil_phase="0.25*(kx/cutoff)^2+0.13*ky/cutoff radians; cutoff=2*pi*NA/wavelength",
             focus_z_um=[float(z) for z in z_focus], background=float(reference["background"]),
             max_abs_linear_contrast=float(jnp.max(jnp.abs(reference["linear_contrast"]))),
             methods=metrics, axial_convergence=convergence, amplitude_scaling=amplitude,
@@ -258,10 +261,10 @@ def _plot(output, spacing, z_focus, fr, fi, reference, predictions, convergence)
         axes[0].plot(np.asarray(z_focus), np.asarray(predictions[name])[:, cy, cx], ".--", label=name)
     axes[0].set(xlabel="focus z [um]", ylabel="contrast", title="Axial profile")
     axes[0].legend(fontsize=7)
-    axes[1].loglog([c["dfz"] for c in convergence], [c["relative_l2"] for c in convergence], "o-")
-    axes[1].set_xticks([c["dfz"] for c in convergence], [f"{c['dfz']:.3f}" for c in convergence])
+    axes[1].loglog([c["dkz"] for c in convergence], [c["relative_l2"] for c in convergence], "o-")
+    axes[1].set_xticks([c["dkz"] for c in convergence], [f"{c['dkz']:.3f}" for c in convergence])
     axes[1].xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
-    axes[1].set(xlabel="dfz [cycles/um]", ylabel="relative contrast L2 error", title="Linear cap gridding")
+    axes[1].set(xlabel="dkz [rad/um]", ylabel="relative contrast L2 error", title="Linear cap gridding")
     axes[1].grid(True)
     z_specimen = (np.arange(fr.shape[0]) - fr.shape[0] // 2) * spacing[0]
     axes[2].plot(z_specimen, np.asarray(fr)[:, cy, cx], label="F_real")

@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 
 from examples.validate_born import make_case
-from wotf import circular_pupil, frequency_axes, predict_contrast, wotf_ewald, wotf_fft
-from wotf.transfer import _axial_kernel
+from wotf import circular_pupil, wavevector_axes, predict_contrast, wotf_ewald, wotf_fft
+from wotf.wotf import _axial_kernel
 
 
 def direct_channels(shape, spacing, optics):
@@ -13,16 +13,16 @@ def direct_channels(shape, spacing, optics):
     nz, ny, nx = shape
     dz, dy, dx = spacing
     z = np.fft.ifftshift((np.arange(nz) - nz // 2) * dz)
-    fy, fx = np.fft.fftfreq(ny, dy), np.fft.fftfreq(nx, dx)
-    w = np.sqrt(np.maximum((optics["n_medium"] / optics["wavelength"]) ** 2
-                           - fy[:, None] ** 2 - fx[None, :] ** 2, 0))
+    ky, kx = 2 * np.pi * np.fft.fftfreq(ny, dy), 2 * np.pi * np.fft.fftfreq(nx, dx)
+    kz = np.sqrt(np.maximum((2 * np.pi * optics["n_medium"] / optics["wavelength"]) ** 2
+                            - ky[:, None] ** 2 - kx[None, :] ** 2, 0))
     source, pupil = np.asarray(optics["source"]), np.asarray(optics["pupil"])
     background = np.sum(source * abs(pupil) ** 2)
     cross = np.zeros(shape, complex)
     for sy, sx in zip(*np.nonzero(source)):
         for vy, vx in zip(*np.nonzero(pupil)):
-            coefficient = source[sy, sx] * pupil[sy, sx].conjugate() * pupil[vy, vx] / (4 * np.pi * w[vy, vx] * background)
-            cross[:, (vy - sy) % ny, (vx - sx) % nx] += coefficient * np.exp(2j * np.pi * (w[vy, vx] - w[sy, sx]) * z)
+            coefficient = source[sy, sx] * pupil[sy, sx].conjugate() * pupil[vy, vx] / (2 * kz[vy, vx] * background)
+            cross[:, (vy - sy) % ny, (vx - sx) % nx] += coefficient * np.exp(1j * (kz[vy, vx] - kz[sy, sx]) * z)
     reverse = np.conj(cross[:, (-np.arange(ny)) % ny][:, :, (-np.arange(nx)) % nx])
     return dz * np.fft.fft(-1j * (cross - reverse), axis=0), dz * np.fft.fft(cross + reverse, axis=0)
 
@@ -47,14 +47,14 @@ def test_both_methods_match_direct_correlation(shape, dtype, tolerance):
 def test_original_pgt_channel_signs_are_equivalent():
     fr, _, spacing, optics = make_case()
     nz, ny, nx = fr.shape
-    _, fy, fx = frequency_axes(fr.shape, spacing)
-    w = np.sqrt(np.maximum((optics["n_medium"] / optics["wavelength"]) ** 2
-                           - np.asarray(fy)[:, None] ** 2 - np.asarray(fx)[None, :] ** 2, 0))
+    _, ky, kx = wavevector_axes(fr.shape, spacing)
+    kz = np.sqrt(np.maximum((2 * np.pi * optics["n_medium"] / optics["wavelength"]) ** 2
+                            - np.asarray(ky)[:, None] ** 2 - np.asarray(kx)[None, :] ** 2, 0))
     z = np.fft.ifftshift((np.arange(nz) - nz // 2) * spacing[0])
     source, pupil = np.asarray(optics["source"]), np.asarray(optics["pupil"])
-    phase = np.exp(2j * np.pi * z[:, None, None] * w)
+    phase = np.exp(1j * z[:, None, None] * kz)
     a = source * pupil * phase
-    b = pupil * phase / (4 * np.pi * np.where(w > 0, w, 1))
+    b = pupil * phase / (2 * np.where(kz > 0, kz, 1))
     reversed_product = np.fft.fft2(a) * np.fft.fft2(b).conj()
     background = np.sum(source * abs(pupil) ** 2)
     old_real = 1j * spacing[0] * np.fft.fft(2j * np.fft.ifft2(reversed_product.imag), axis=0) / background
@@ -68,19 +68,19 @@ def test_original_pgt_channel_signs_are_equivalent():
 def test_finite_kernel_including_even_grid_phase(nz, dtype, tolerance):
     real = getattr(jnp, dtype)
     dz = jnp.asarray(0.35, real)
-    fz = jnp.fft.fftfreq(nz, dz, dtype=real)
-    eta = jnp.asarray([0, 0.137, -0.291, 1 / (nz * 0.35)], real)
+    kz = 2 * jnp.pi * jnp.fft.fftfreq(nz, dz, dtype=real)
+    delta_kz = 2 * jnp.pi * jnp.asarray([0, 0.137, -0.291, 1 / (nz * 0.35)], real)
     z = jnp.fft.ifftshift((jnp.arange(nz, dtype=real) - nz // 2) * dz)
-    direct = dz * jnp.sum(jnp.exp(2j * jnp.pi * (eta[:, None, None] - fz[None, :, None]) * z), axis=-1)
-    np.testing.assert_allclose(_axial_kernel(eta, fz, dz), direct, rtol=tolerance, atol=tolerance)
+    direct = dz * jnp.sum(jnp.exp(1j * (delta_kz[:, None, None] - kz[None, :, None]) * z), axis=-1)
+    np.testing.assert_allclose(_axial_kernel(delta_kz, kz, dz), direct, rtol=tolerance, atol=tolerance)
 
 
 @pytest.mark.parametrize("method", [wotf_fft, wotf_ewald])
 @pytest.mark.parametrize("dtype,tolerance", [("float64", 1e-13), ("float32", 1e-8)])
 def test_analytic_uniform_thin_layer_sign_and_absolute_scale(method, dtype, tolerance):
     shape, spacing = (9, 9, 11), (0.4, 0.22, 0.2)
-    _, fy, fx = frequency_axes(shape, spacing)
-    pupil = circular_pupil(fy, fx, wavelength=0.53, na=0.4)
+    _, ky, kx = wavevector_axes(shape, spacing)
+    pupil = circular_pupil(ky, kx, wavelength=0.53, na=0.4)
     source = jnp.zeros(shape[1:]).at[0, 0].set(1)
     real = jnp.zeros(shape).at[shape[0] // 2].set(0.02)
     imag = jnp.zeros(shape).at[shape[0] // 2].set(-0.01)

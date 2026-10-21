@@ -12,5 +12,5 @@ wheels/
 .mplconfig/
 artifacts/
 
-# Docs
-docs
+# Local reference manuscripts and original scripts
+docs/refs/

@@ -1,15 +1,15 @@
-"""FFT correlation and translated Ewald caps, under one Born convention."""
+"""WOTF generation by FFT correlation/Ewald caps and linear contrast prediction."""
 
 from functools import partial
 
 import jax
 import jax.numpy as jnp
 
-from ._common import _precision, _prepare, frequency_axes
+from ._common import _precision, _prepare, wavevector_axes
 
 
 def _conjugate_reverse(spectrum):
-    """conj(C(-f)), with exact modular reflection for odd and even grids."""
+    """conj(C(-k)), with exact modular reflection for odd and even grids."""
     for axis, n in enumerate(spectrum.shape):
         spectrum = jnp.take(spectrum, (-jnp.arange(n)) % n, axis=axis)
     return jnp.conj(spectrum)
@@ -21,13 +21,13 @@ def _channels(cross):
 
 
 @jax.jit
-def _fft_kernel(source, pupil, longitudinal, z_lag, dz, fm, background):
-    # Removing the common carrier exp(2 pi i fm z) is exact and reduces
+def _fft_kernel(source, pupil, kz, z_lag, dz, km, background):
+    # Removing the common carrier exp(i km z) is exact and reduces
     # cancellation in single precision. It cancels in both correlations.
-    phase = jnp.exp(2j * jnp.pi * z_lag[:, None, None] * (longitudinal - fm))
+    phase = jnp.exp(1j * z_lag[:, None, None] * (kz - km))
     illumination_arm = source * pupil * phase
-    # analytical.tex uses 1/(2 i k_z) = 1/(4 pi i w) in cycles/length.
-    scattering_arm = pupil * phase / (4j * jnp.pi * jnp.where(longitudinal > 0, longitudinal, 1))
+    # analytical.tex: outgoing Born factor 1/(2 i k_z).
+    scattering_arm = pupil * phase / (2j * jnp.where(kz > 0, kz, 1))
     fft_illumination = jnp.fft.fft2(illumination_arm)
     fft_scattering = jnp.fft.fft2(scattering_arm)
     correlation_spectrum = jnp.conj(fft_illumination) * fft_scattering
@@ -44,7 +44,7 @@ def _fft_kernel(source, pupil, longitudinal, z_lag, dz, fm, background):
 
 
 def wotf_fft(
-    shape, spacing, *, wavelength, n_medium, source, pupil, dtype="float64"
+    shape, spacing, *, wavelength, n_medium, source, pupil, dtype=None
 ):
     """Return (H_real, H_imag) by FFT correlation, both in FFT order.
 
@@ -59,21 +59,22 @@ def wotf_fft(
     finite specimen. See the independent Born example for a guarded ROI.
     """
     real, _ = _precision(dtype)
-    with jax.enable_x64(True):
-        source, pupil, w, background, _, _ = _prepare(
+    with jax.enable_x64(real == jnp.float64):
+        source, pupil, kz, background, _, _ = _prepare(
             shape, spacing, wavelength, n_medium, source, pupil, dtype
         )
         dz = jnp.asarray(spacing[0], real)
         z_lag = jnp.fft.ifftshift((jnp.arange(shape[0], dtype=real) - shape[0] // 2) * dz)
         return _fft_kernel(
-            source, pupil, w, z_lag, dz, jnp.asarray(n_medium / wavelength, real), background
+            source, pupil, kz, z_lag, dz,
+            jnp.asarray(2 * jnp.pi * n_medium / wavelength, real), background,
         )
 
 
-def _axial_kernel(eta, fz, dz):
-    """DFT of exp(2 pi i eta z_lag), including dz; no axial FFT used."""
-    nz = fz.size
-    u = (eta[:, None] - fz[None, :]) * dz
+def _axial_kernel(delta_kz, kz, dz):
+    """DFT of exp(i delta_kz z_lag), including dz; no axial FFT used."""
+    nz = kz.size
+    u = (delta_kz[:, None] - kz[None, :]) * dz / (2 * jnp.pi)
     u = u - jnp.floor(u + 0.5)  # exact period-one sum; avoid removable poles
     # Centered even grids include -nz/2 but not +nz/2: retain its phase.
     return (
@@ -84,27 +85,28 @@ def _axial_kernel(eta, fz, dz):
 
 @partial(jax.jit, static_argnames=("shape", "axial"))
 def _ewald_kernel(
-    source_weights, source_pupil, source_w, source_y, source_x,
-    detector_pupil, detector_w, detector_y, detector_x,
-    fz, dz, background, *, shape, axial,
+    source_weights, source_pupil, source_kz, source_y, source_x,
+    detector_pupil, detector_kz, detector_y, detector_x,
+    kz, dz, background, *, shape, axial,
 ):
     nz, ny, nx = shape
 
     def accumulate(i, cross):
         qy = (detector_y - source_y[i]) % ny
         qx = (detector_x - source_x[i]) % nx
-        eta = detector_w - source_w[i]
+        delta_kz = detector_kz - source_kz[i]
         coefficient = (
             source_weights[i] * jnp.conj(source_pupil[i]) * detector_pupil
-            / (4 * jnp.pi * detector_w * background)
+            / (2 * detector_kz * background)
         )
         if axial == "finite":
-            values = coefficient[:, None] * _axial_kernel(eta, fz, dz)
+            values = coefficient[:, None] * _axial_kernel(delta_kz, kz, dz)
             return cross.at[:, qy, qx].add(values.T)
-        position = eta * (nz * dz)
+        dkz = 2 * jnp.pi / (nz * dz)
+        position = delta_kz / dkz
         lo = jnp.floor(position).astype(jnp.int32)
         fraction = position - lo
-        weight = coefficient * (nz * dz)  # delta(fz-eta) -> weights / dfz
+        weight = coefficient * (nz * dz)  # 2*pi*delta(kz-delta_kz): 2*pi/dkz
         cross = cross.at[lo % nz, qy, qx].add(weight * (1 - fraction))
         return cross.at[(lo + 1) % nz, qy, qx].add(weight * fraction)
 
@@ -117,29 +119,29 @@ def _ewald_kernel(
 
 def wotf_ewald(
     shape, spacing, *, wavelength, n_medium, source, pupil,
-    axial="finite", dtype="float64",
+    axial="finite", dtype=None,
 ):
     """Return (H_real, H_imag) by translating and accumulating Ewald caps.
 
     Parameters, units and ordering match :func:`wotf_fft`. ``axial='finite'``
     uses the exact finite axial DFT kernel (the same sampled impulse response
     as FFT correlation). ``axial='linear'`` deposits each continuous cap into
-    two adjacent bins with total delta weight 1/dfz. The latter is an
+    two adjacent bins with total axial-kernel weight 2*pi/dkz. The latter is an
     approximation whose error must be checked by increasing axial extent.
     No illumination direction is rounded: source modes are grid cells.
     """
     real, _ = _precision(dtype)
     if axial not in ("finite", "linear"):
         raise ValueError('axial must be "finite" or "linear"')
-    with jax.enable_x64(True):
-        source, pupil, w, background, si, vi = _prepare(
+    with jax.enable_x64(real == jnp.float64):
+        source, pupil, kz_modes, background, si, vi = _prepare(
             shape, spacing, wavelength, n_medium, source, pupil, dtype
         )
-        fz, _, _ = frequency_axes(shape, spacing, dtype=dtype)
+        kz, _, _ = wavevector_axes(shape, spacing, dtype=dtype)
         return _ewald_kernel(
-            source[si], pupil[si], w[si], *si,
-            pupil[vi], w[vi], *vi,
-            fz, jnp.asarray(spacing[0], real), background,
+            source[si], pupil[si], kz_modes[si], *si,
+            pupil[vi], kz_modes[vi], *vi,
+            kz, jnp.asarray(spacing[0], real), background,
             shape=tuple(shape), axial=axial,
         )
 
@@ -153,7 +155,7 @@ def _predict_kernel(real_potential, imag_potential, h_real, h_imag):
     return jnp.fft.fftshift(jnp.fft.ifftn(spectrum)).real
 
 
-def predict_contrast(F_real, F_imag, H_real, H_imag, *, dtype="float64"):
+def predict_contrast(F_real, F_imag, H_real, H_imag, *, dtype=None):
     """Predict centered real c=(I-I0)/I0 with circular 3D convolution.
 
     All four arrays must share shape (nz, ny, nx). Spatial potentials are
@@ -163,7 +165,7 @@ def predict_contrast(F_real, F_imag, H_real, H_imag, *, dtype="float64"):
     axial integration dz. Absolute intensity is I0*(1+c).
     """
     real, complex_ = _precision(dtype)
-    with jax.enable_x64(True):
+    with jax.enable_x64(real == jnp.float64):
         fr, fi = jnp.asarray(F_real, real), jnp.asarray(F_imag, real)
         hr, hi = jnp.asarray(H_real, complex_), jnp.asarray(H_imag, complex_)
         return _predict_kernel(fr, fi, hr, hi)
