@@ -53,31 +53,15 @@ def test_reject_unsupported_precision(bad):
         frequency_axes((3, 5, 7), (1, 1, 1), dtype=bad)
 
 
-@pytest.mark.parametrize("shape,spacing", [((0, 5, 7), (1, 1, 1)), ((3.5, 5, 7), (1, 1, 1)), ((3, 5, 7), (-1, 1, 1)), ((3, 5, 7), (float("nan"), 1, 1))])
-def test_reject_invalid_grid(shape, spacing):
-    with pytest.raises(ValueError):
-        frequency_axes(shape, spacing)
-
-
 @pytest.mark.parametrize("method", [wotf_fft, wotf_ewald])
 @pytest.mark.parametrize("bad,match", [
-    ("negative", "nonnegative"), ("nonfinite", "finite"),
-    ("complex", "real intensity"), ("shape", "shape"),
     ("zero", "background"), ("darkfield", "background"),
     ("evanescent", "propagating"), ("transverse_alias", "transverse"),
     ("axial_alias", "axial sampling"),
 ])
-def test_reject_invalid_optics(method, bad, match):
+def test_reject_unsupported_physics(method, bad, match):
     fr, _, spacing, optics = make_case()
-    if bad == "negative":
-        optics["source"] = optics["source"].at[0, 0].set(-1)
-    elif bad == "nonfinite":
-        optics["pupil"] = optics["pupil"].at[0, 0].set(jnp.nan)
-    elif bad == "complex":
-        optics["source"] = optics["source"].astype(jnp.complex128)
-    elif bad == "shape":
-        optics["source"] = optics["source"][:-1]
-    elif bad == "zero":
+    if bad == "zero":
         optics["source"] = jnp.zeros_like(optics["source"])
     elif bad == "darkfield":
         optics["pupil"] = jnp.zeros_like(optics["pupil"])
@@ -96,11 +80,3 @@ def test_reject_unknown_axial_mode():
     fr, _, spacing, optics = make_case()
     with pytest.raises(ValueError, match="axial"):
         wotf_ewald(fr.shape, spacing, **optics, axial="nearest")
-
-
-def test_pupil_rejects_unresolved_cutoff_and_shifted_axes():
-    _, fy, fx = frequency_axes((5, 7, 9), (0.3, 1.0, 1.0))
-    with pytest.raises(ValueError, match="Nyquist"):
-        circular_pupil(fy, fx, wavelength=0.53, na=0.6)
-    with pytest.raises(ValueError, match="unshifted"):
-        circular_pupil(jnp.fft.fftshift(fy), fx, wavelength=0.53, na=0.1)

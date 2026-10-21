@@ -46,7 +46,8 @@ c_single = predict_contrast(F_real, F_imag, *H_single, dtype="float32")
 所有公开函数返回 `jax.Array`。默认实数为 `float64`，传递函数为 `complex128`；
 选择 `dtype="float32"` 后分别为 `float32/complex64`。导入和调用不会永久改变 JAX 的 x64 配置。
 调用前已在单精度中创建的输入，其丢失的信息无法通过后续双精度转换恢复。
-公开入口进行具体数值校验，内部固定形状计算核使用 JIT；入口不承诺可直接被外层 `jax.jit` 追踪。
+接口按课题组内部使用设计，假定输入满足下述形状、单位和取值约定；不逐项检查类型、有限性或 Hermitian 对称性。
+WOTF 计算仅保留非零背景、传播模式和 Nyquist 检查。内部固定形状计算核使用 JIT。
 
 ## 定义与数组约定
 

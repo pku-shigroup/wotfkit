@@ -120,10 +120,3 @@ def test_linear_gridding_retains_even_nyquist_and_real_prediction():
     field = jnp.fft.ifftn(spectrum)
     assert float(jnp.max(jnp.abs(field.imag))) < 1e-15
     assert predict_contrast(fr, fi, *h).shape == fr.shape
-
-
-def test_prediction_rejects_nonhermitian_transfer():
-    fr, fi, spacing, optics = make_case()
-    hr, hi = wotf_fft(fr.shape, spacing, **optics)
-    with pytest.raises(ValueError, match="Hermitian"):
-        predict_contrast(fr, fi, hr.at[1, 2, 3].add(1j), hi)

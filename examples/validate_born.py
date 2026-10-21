@@ -66,14 +66,10 @@ def born_stack(
     complex_ = jnp.complex128 if dtype == "float64" else jnp.complex64
     with jax.enable_x64(True):
         fr, fi = jnp.asarray(F_real, real), jnp.asarray(F_imag, real)
-        if fr.ndim != 3 or fr.shape != fi.shape:
-            raise ValueError("real and imaginary potentials must share a 3D shape")
         nz, ny, nx = fr.shape
         dz, dy, dx = (jnp.asarray(d, real) for d in spacing)
         potential = fr + 1j * fi
         source, pupil = jnp.asarray(source, real), jnp.asarray(pupil, complex_)
-        if source.shape != (ny, nx) or pupil.shape != (ny, nx):
-            raise ValueError("source/pupil shape does not match specimen")
         z = (jnp.arange(nz, dtype=real) - nz // 2) * dz
         y = (jnp.arange(ny, dtype=real) - ny // 2) * dy
         x = (jnp.arange(nx, dtype=real) - nx // 2) * dx

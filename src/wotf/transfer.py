@@ -5,7 +5,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from ._common import _grid_parameters, _precision, _prepare, frequency_axes
+from ._common import _precision, _prepare, frequency_axes
 
 
 def _conjugate_reverse(spectrum):
@@ -59,7 +59,6 @@ def wotf_fft(
     finite specimen. See the independent Born example for a guarded ROI.
     """
     real, _ = _precision(dtype)
-    shape, spacing = _grid_parameters(shape, spacing)
     with jax.enable_x64(True):
         source, pupil, w, background, _, _ = _prepare(
             shape, spacing, wavelength, n_medium, source, pupil, dtype
@@ -130,7 +129,6 @@ def wotf_ewald(
     No illumination direction is rounded: source modes are grid cells.
     """
     real, _ = _precision(dtype)
-    shape, spacing = _grid_parameters(shape, spacing)
     if axial not in ("finite", "linear"):
         raise ValueError('axial must be "finite" or "linear"')
     with jax.enable_x64(True):
@@ -142,7 +140,7 @@ def wotf_ewald(
             source[si], pupil[si], w[si], *si,
             pupil[vi], w[vi], *vi,
             fz, jnp.asarray(spacing[0], real), background,
-            shape=shape, axial=axial,
+            shape=tuple(shape), axial=axial,
         )
 
 
@@ -166,17 +164,6 @@ def predict_contrast(F_real, F_imag, H_real, H_imag, *, dtype="float64"):
     """
     real, complex_ = _precision(dtype)
     with jax.enable_x64(True):
-        if jnp.iscomplexobj(F_real) or jnp.iscomplexobj(F_imag):
-            raise ValueError("F_real and F_imag must each be real spatial arrays")
         fr, fi = jnp.asarray(F_real, real), jnp.asarray(F_imag, real)
         hr, hi = jnp.asarray(H_real, complex_), jnp.asarray(H_imag, complex_)
-        if fr.ndim != 3 or not (fr.shape == fi.shape == hr.shape == hi.shape):
-            raise ValueError("potentials and transfer functions must share a 3D shape")
-        for array in (fr, fi, hr, hi):
-            if not bool(jnp.all(jnp.isfinite(array))):
-                raise ValueError("potentials and transfer functions must be finite")
-        for name, h in (("H_real", hr), ("H_imag", hi)):
-            tolerance = 64 * jnp.finfo(real).eps * jnp.max(jnp.abs(h))
-            if not bool(jnp.all(jnp.abs(h - _conjugate_reverse(h)) <= tolerance)):
-                raise ValueError(f"{name} must be Hermitian to predict a real intensity")
         return _predict_kernel(fr, fi, hr, hi)
