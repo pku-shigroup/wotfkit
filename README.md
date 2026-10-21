@@ -66,6 +66,12 @@ FFT 与默认 Ewald 计算同一个有限轴向 lag 响应。`wotf_ewald(..., ax
 另外提供原脚本的轴向线性落格思想，校正了显式单位和反向频率处理；它具有可测的落格误差。
 两种方法都检查物理频率差是否满足 Nyquist，不通过取模隐藏欠采样。
 
+FFT 的中间变量按 `analytical.tex` 组织：`illumination_arm` 对应光源加权的 pupil，
+`scattering_arm` 对应包含 `1/(4πi w)` 的散射臂（文档角频率写法为 `1/(2ik_z)`）。
+`A=corr(illumination_arm, scattering_arm)`、`B=corr(scattering_arm, illumination_arm)`，
+轴向变换前的通道为 `h_real=A+B`、`h_imag=i(A−B)`，最后沿 z 做 FFT、乘 dz、除以 I₀。
+两臂均去除共同载波 `exp(2πif_m z)` 以改善单精度稳定性；它在 A/B 中严格抵消。
+
 ## 独立物理验证与边界
 
 示例的 Born 参考逐层计算散射场，在样品外出射面累加，再传播到九个焦平面；不复用 WOTF 代码。

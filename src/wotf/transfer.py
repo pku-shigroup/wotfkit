@@ -23,13 +23,24 @@ def _channels(cross):
 @jax.jit
 def _fft_kernel(source, pupil, longitudinal, z_lag, dz, fm, background):
     # Removing the common carrier exp(2 pi i fm z) is exact and reduces
-    # cancellation in single precision. It cancels in conj(a(s))*b(s+q).
+    # cancellation in single precision. It cancels in both correlations.
     phase = jnp.exp(2j * jnp.pi * z_lag[:, None, None] * (longitudinal - fm))
-    a = source * pupil * phase
-    b = pupil * phase / (4 * jnp.pi * jnp.where(longitudinal > 0, longitudinal, 1))
-    correlation = jnp.fft.ifft2(jnp.conj(jnp.fft.fft2(a)) * jnp.fft.fft2(b))
-    cross = dz * jnp.fft.fft(correlation, axis=0) / background
-    return _channels(cross)
+    illumination_arm = source * pupil * phase
+    # analytical.tex uses 1/(2 i k_z) = 1/(4 pi i w) in cycles/length.
+    scattering_arm = pupil * phase / (4j * jnp.pi * jnp.where(longitudinal > 0, longitudinal, 1))
+    fft_illumination = jnp.fft.fft2(illumination_arm)
+    fft_scattering = jnp.fft.fft2(scattering_arm)
+    correlation_spectrum = jnp.conj(fft_illumination) * fft_scattering
+
+    # Match analytical.tex: A = corr(illumination_arm, scattering_arm),
+    # B = corr(scattering_arm, illumination_arm). Both include the Born 1/i.
+    A = jnp.fft.ifft2(correlation_spectrum)
+    B = jnp.fft.ifft2(jnp.conj(correlation_spectrum))
+    h_real = A + B
+    h_imag = 1j * (A - B)
+    H_real = dz * jnp.fft.fft(h_real, axis=0) / background
+    H_imag = dz * jnp.fft.fft(h_imag, axis=0) / background
+    return H_real, H_imag
 
 
 def wotf_fft(

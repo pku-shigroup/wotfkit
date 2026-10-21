@@ -38,7 +38,10 @@ def test_both_methods_match_direct_correlation(shape, dtype, tolerance):
         for actual, target in zip(h, expected):
             assert np.linalg.norm(np.asarray(actual) - target) / np.linalg.norm(target) < tolerance
             reflected = np.conj(np.asarray(actual)[np.ix_(*[(-np.arange(n)) % n for n in shape])])
-            np.testing.assert_array_equal(actual, reflected)
+            # Combining A/B before the axial FFT preserves Hermitian symmetry
+            # up to transform roundoff, rather than imposing it bit for bit.
+            roundoff = 8 * np.finfo(dtype).eps * np.max(np.abs(actual))
+            np.testing.assert_allclose(actual, reflected, rtol=0, atol=roundoff)
 
 
 def test_original_pgt_channel_signs_are_equivalent():
