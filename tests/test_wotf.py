@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 
 from examples.validate_born import make_case
-from wotf import circular_pupil, wavevector_axes, predict_contrast, wotf_ewald, wotf_fft
-from wotf.wotf import _axial_kernel
+from wotf import circular_pupil, k_axes, predict_contrast, wotf_ewald, wotf_fft
+from wotf.wotf_ewald import _axial_kernel
 
 
 def direct_channels(shape, spacing, optics):
@@ -47,7 +47,7 @@ def test_both_methods_match_direct_correlation(shape, dtype, tolerance):
 def test_original_pgt_channel_signs_are_equivalent():
     fr, _, spacing, optics = make_case()
     nz, ny, nx = fr.shape
-    _, ky, kx = wavevector_axes(fr.shape, spacing)
+    _, ky, kx = k_axes(fr.shape, spacing)
     kz = np.sqrt(np.maximum((2 * np.pi * optics["n_medium"] / optics["wavelength"]) ** 2
                             - np.asarray(ky)[:, None] ** 2 - np.asarray(kx)[None, :] ** 2, 0))
     z = np.fft.ifftshift((np.arange(nz) - nz // 2) * spacing[0])
@@ -79,7 +79,7 @@ def test_finite_kernel_including_even_grid_phase(nz, dtype, tolerance):
 @pytest.mark.parametrize("dtype,tolerance", [("float64", 1e-13), ("float32", 1e-8)])
 def test_analytic_uniform_thin_layer_sign_and_absolute_scale(method, dtype, tolerance):
     shape, spacing = (9, 9, 11), (0.4, 0.22, 0.2)
-    _, ky, kx = wavevector_axes(shape, spacing)
+    _, ky, kx = k_axes(shape, spacing)
     pupil = circular_pupil(ky, kx, wavelength=0.53, na=0.4)
     source = jnp.zeros(shape[1:]).at[0, 0].set(1)
     real = jnp.zeros(shape).at[shape[0] // 2].set(0.02)

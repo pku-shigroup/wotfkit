@@ -6,13 +6,16 @@ block; numerical functions default to double precision outside a block.
 See the README and docs/theory_audit.md for conventions and model limits.
 """
 
-from ._common import circular_pupil, precision, wavevector_axes
-from .wotf import predict_contrast, wotf_ewald, wotf_fft
+from ._common import circular_pupil, precision, k_axes
+from .forward import compute_wotf, predict_contrast
+from .wotf_ewald import wotf_ewald
+from .wotf_fft import wotf_fft
 
 __all__ = [
     "precision",
-    "wavevector_axes",
+    "k_axes",
     "circular_pupil",
+    "compute_wotf",
     "wotf_fft",
     "wotf_ewald",
     "predict_contrast",

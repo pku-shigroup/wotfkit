@@ -1,9 +1,11 @@
+import warnings
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from examples.validate_born import born_stack, make_case
-from wotf import predict_contrast, wotf_ewald, wotf_fft
+from wotf import circular_pupil, k_axes, predict_contrast, wotf_ewald, wotf_fft
 
 
 @pytest.mark.parametrize("shape", [(17, 15, 17), (16, 14, 18)])
@@ -74,3 +76,48 @@ def test_independent_reference_precision(dtype):
     fr, fi, spacing, optics = make_case()
     data = born_stack(fr, fi, spacing, **optics, z_focus=[0], dtype=dtype)
     assert all(str(a.dtype) == dtype for a in data.values())
+
+
+@pytest.mark.parametrize("shape", [(17, 15, 17), (16, 14, 18)])
+@pytest.mark.parametrize("na_illumination,na_detection", [(0.3, 0.6), (0.8, 0.45)])
+@pytest.mark.parametrize("dtype,tolerance", [("float64", 1e-12), ("float32", 1e-4)])
+def test_unequal_apertures_match_transfer_and_independent_born(
+    shape, na_illumination, na_detection, dtype, tolerance,
+):
+    fr, fi, spacing, _ = make_case(shape)
+    _, ky, kx = k_axes(shape, spacing)
+    cutoff = 2 * jnp.pi * na_detection / 0.53
+    radial2 = ky[:, None] ** 2 + kx[None, :] ** 2
+    source = jnp.abs(circular_pupil(ky, kx, wavelength=0.53, na=na_illumination)) ** 2
+    source = source * (1 + 0.2 * kx[None, :] / (2 * jnp.pi * na_illumination / 0.53))
+    pupil = circular_pupil(ky, kx, wavelength=0.53, na=na_detection)
+    pupil = pupil * (1 - 0.25 * radial2 / cutoff**2) * jnp.exp(
+        1j * (0.19 * kx[None, :] / cutoff + 0.31 * ky[:, None] ** 2 / cutoff**2)
+    )
+    optics = dict(wavelength=0.53, n_medium=1.33, source=source, pupil=pupil)
+    # The reference retains all illumination. Outside-pupil modes have a
+    # zero reference field, so their *linear* interference term is zero.
+    focus = jnp.arange(-4, 5, dtype=jnp.float64) * spacing[0]
+    reference = born_stack(fr, fi, spacing, **optics, z_focus=focus)["linear_contrast"]
+    transfers = []
+    for method in (wotf_fft, wotf_ewald):
+        if na_illumination > na_detection:
+            with pytest.warns(UserWarning, match="outside.*discarded"):
+                h = method(shape, spacing, **optics, dtype=dtype)
+        else:
+            with warnings.catch_warnings(record=True) as quiet:
+                h = method(shape, spacing, **optics, dtype=dtype)
+            assert not quiet
+        transfers.append(h)
+        start = shape[0] // 2 - 4
+        prediction = predict_contrast(fr, fi, *h, dtype=dtype)[start:start + 9]
+        error = np.linalg.norm(np.asarray(prediction - reference)) / np.linalg.norm(reference)
+        assert error < tolerance
+    for fft, finite in zip(*transfers):
+        fft, finite = np.asarray(fft), np.asarray(finite)
+        norm = np.linalg.norm(fft)
+        error = np.linalg.norm(fft - finite)
+        if norm:
+            assert error / norm < tolerance
+        else:
+            assert np.max(np.abs(finite)) < tolerance

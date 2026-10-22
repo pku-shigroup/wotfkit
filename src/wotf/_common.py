@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+import warnings
 
 import jax
 import jax.numpy as jnp
@@ -36,7 +37,7 @@ def precision(dtype):
         _default_dtype.reset(token)
 
 
-def wavevector_axes(shape, spacing, *, dtype=None):
+def k_axes(shape, spacing, *, dtype=None):
     """Return (kz, ky, kx), in rad/length and unshifted FFT order.
 
     ``shape=(nz, ny, nx)`` and ``spacing=(dz, dy, dx)`` refer to the sample,
@@ -69,20 +70,28 @@ def _prepare(shape, spacing, wavelength, n_medium, source, pupil, dtype):
     real, complex_ = _precision(dtype)
     source = jnp.asarray(source, real)
     pupil = jnp.asarray(pupil, complex_)
+    detected = pupil != 0
+    if bool(jnp.any((source > 0) & ~detected)):
+        warnings.warn(
+            "Source modes outside the detection pupil were discarded; "
+            "they have no linear brightfield contribution.",
+            UserWarning, stacklevel=3,
+        )
+    source = jnp.where(detected, source, 0)
     background = jnp.sum(source * jnp.abs(pupil) ** 2)
     if not bool(background > 0):
         raise ValueError("nonzero brightfield background I0=sum(source*abs(pupil)**2) required")
 
-    _, ky, kx = wavevector_axes(shape, spacing, dtype=dtype)
+    _, ky, kx = k_axes(shape, spacing, dtype=dtype)
     radial2 = ky[:, None] ** 2 + kx[None, :] ** 2
     km = jnp.asarray(2 * jnp.pi * n_medium / wavelength, real)
-    active = (source > 0) | (jnp.abs(pupil) > 0)
+    active = (source > 0) | detected
     if bool(jnp.any(active & (radial2 >= km**2))):
         raise ValueError("source and pupil must contain only strictly propagating modes")
     # Inactive frequencies may be evanescent; their pupil/source are zero.
     kz = jnp.sqrt(jnp.maximum(km**2 - radial2, 0))
-    source_indices = jnp.nonzero((source > 0) & (jnp.abs(pupil) > 0))
-    detector_indices = jnp.nonzero(jnp.abs(pupil) > 0)
+    source_indices = jnp.nonzero(source > 0)
+    detector_indices = jnp.nonzero(detected)
 
     # All physical v-s AND s-v frequencies must fit, before modular indexing.
     for axis, n, si, vi in zip(

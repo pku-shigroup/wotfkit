@@ -95,6 +95,18 @@
       "prediction_dtype": "float64"
     }
   },
+  "fft_vs_ewald_finite": {
+    "real": {
+      "relative_l2": 4.52270425353377e-16,
+      "max_abs": 8.371725890308806e-17,
+      "bitwise_equal": false
+    },
+    "imag": {
+      "relative_l2": 4.2333129289949187e-16,
+      "max_abs": 9.724127023599914e-17,
+      "bitwise_equal": false
+    }
+  },
   "axial_convergence": [
     {
       "nz": 17,

@@ -155,7 +155,7 @@ def error_metrics(prediction, reference):
 
 def run_validation(dtype="float64", output=Path("artifacts/born-float64")):
     # Library functions appear only on the prediction side of this comparison.
-    from wotf import precision, predict_contrast, wotf_ewald, wotf_fft
+    from wotf import compute_wotf, precision, predict_contrast
 
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
@@ -165,14 +165,15 @@ def run_validation(dtype="float64", output=Path("artifacts/born-float64")):
         reference = born_stack(fr, fi, spacing, **optics, z_focus=z_focus)
         roi = slice(fr.shape[0] // 2 - 4, fr.shape[0] // 2 + 5)
         methods = {
-            "fft": (wotf_fft, {}),
-            "ewald_finite": (wotf_ewald, dict(axial="finite")),
-            "ewald_linear": (wotf_ewald, dict(axial="linear")),
+            "fft": dict(method="fft"),
+            "ewald_finite": dict(method="ewald", axial="finite"),
+            "ewald_linear": dict(method="ewald", axial="linear"),
         }
-        predictions, metrics = {}, {}
-        for name, (method, options) in methods.items():
+        predictions, metrics, transfers = {}, {}, {}
+        for name, options in methods.items():
             with precision(dtype):
-                h = method(fr.shape, spacing, **optics, **options)
+                h = compute_wotf(fr.shape, spacing, **optics, **options)
+                transfers[name] = h
                 predictions[name] = predict_contrast(fr, fi, *h)[roi]
             metrics[name] = dict(
                 versus_linear=error_metrics(predictions[name], reference["linear_contrast"]),
@@ -181,11 +182,25 @@ def run_validation(dtype="float64", output=Path("artifacts/born-float64")):
                 prediction_dtype=str(predictions[name].dtype),
             )
 
+        transfer_comparison = {}
+        for channel, fft, finite in zip(
+            ("real", "imag"), transfers["fft"], transfers["ewald_finite"],
+        ):
+            # Measure the discrepancy of the actual output arrays in double
+            # precision, including when those arrays were computed in single.
+            fft64 = jnp.asarray(fft, jnp.complex128)
+            difference = fft64 - jnp.asarray(finite, jnp.complex128)
+            transfer_comparison[channel] = dict(
+                relative_l2=float(jnp.linalg.norm(difference) / jnp.linalg.norm(fft64)),
+                max_abs=float(jnp.max(jnp.abs(difference))),
+                bitwise_equal=bool(jnp.array_equal(fft, finite)),
+            )
+
         convergence = []
         for nz in (17, 33, 65, 129):
             fr_pad, fi_pad, _, options = make_case((nz, fr.shape[1], fr.shape[2]))
             with precision(dtype):
-                h = wotf_ewald(fr_pad.shape, spacing, **options, axial="linear")
+                h = compute_wotf(fr_pad.shape, spacing, **options, method="ewald", axial="linear")
                 start = nz // 2 - 4
                 prediction = predict_contrast(fr_pad, fi_pad, *h)[start:start + 9]
             convergence.append(dict(nz=nz, dkz=float(2 * jnp.pi / (nz * spacing[0])), **error_metrics(prediction, reference["linear_contrast"])))
@@ -208,7 +223,8 @@ def run_validation(dtype="float64", output=Path("artifacts/born-float64")):
             pupil_phase="0.25*(kx/cutoff)^2+0.13*ky/cutoff radians; cutoff=2*pi*NA/wavelength",
             focus_z_um=[float(z) for z in z_focus], background=float(reference["background"]),
             max_abs_linear_contrast=float(jnp.max(jnp.abs(reference["linear_contrast"]))),
-            methods=metrics, axial_convergence=convergence, amplitude_scaling=amplitude,
+            methods=metrics, fft_vs_ewald_finite=transfer_comparison,
+            axial_convergence=convergence, amplitude_scaling=amplitude,
             boundary="periodic xy; finite z specimen; padded convolution and central focus ROI",
         )
         (output / "metrics.json").write_text(json.dumps(report, indent=2) + "\n")
