@@ -101,6 +101,67 @@ Ewald 的单边系数为 `source*conj(P_source)*P_detector/(2*kz_detector*I0)`�
 
 日常调用继续使用 `from wotf import ...`；原混合模块不再保留。
 
+## 测试
+
+`tests/` 按目的拆为五个脚本，每个脚本保留一项测试：
+
+| 脚本 | 检查内容 |
+| --- | --- |
+| [test_precision.py](tests/test_precision.py) | 默认双精度、单双精度切换、显式覆盖和 JAX x64 配置恢复；覆盖 FFT、finite、linear。 |
+| [test_born.py](tests/test_born.py) | 弱 Gaussian 散射势的纯实、纯虚、混合情况；FFT 和 finite 与独立双精度标量 Born 场传播比较。 |
+| [test_source_clipping.py](tests/test_source_clipping.py) | 超出 pupil 的照明自动丢弃、一次 warning、结果与手动清零一致，以及全部被丢弃后的零背景错误。 |
+| [test_axial_sampling.py](tests/test_axial_sampling.py) | 从实际波矢差计算允许的 dz，确认上限以下可计算、上限以上三种路径均报错。 |
+| [test_bead_forward.py](tests/test_bead_forward.py) | 小球 WOTF 前向预测非零且有限、通道可叠加、焦平面相位响应的奇对称和吸收响应的偶对称及负均值。 |
+
+可单独运行，例如 `uv run --locked pytest tests/test_born.py -q`；运行全部测试使用 `uv run --locked pytest -q`。
+
+Born 测试比较对比度而非总强度，相对 L2 阈值为双精度 `1e-10`、单精度 `1e-4`；
+参考模型自行生成网格、逐层积分和传播，不调用 WOTF 内部函数。linear 的落格误差在独立示例中单独报告。
+轴向 Nyquist 条件为 `max(abs(kz_detector-kz_source)) < pi/dz`：增加 nz 不会修复 dz 过大的欠采样，
+nz 影响轴向频率步长与 lag 范围。
+
+## 半圆与半环照明示例
+
+```bash
+uv run --locked python examples/half_patterns.py
+uv run --locked python examples/half_patterns.py --method ewald --axial finite
+```
+
+探测使用 NA=0.75 的完整圆孔，照明分别是 NA≤0.75 的半圆盘和 0.5≤NA≤0.75 的半环，
+都取 `ky >= 0` 的上半平面，包括直径边界。真空波长为 0.53 μm，介质折射率为 1.33，
+网格 `(129,129,129)`、样品空间采样 `(0.35,0.15,0.15)` μm；横向可容纳照明与探测的最大波矢差。
+默认同时计算 FFT 和线性落格 Ewald，使用双精度；可通过 `--dtype float32` 切换精度，`--output PATH` 指定输出目录。
+`--method ewald --axial finite` 将第一套结果改为 finite Ewald，第二套仍为 linear Ewald。
+
+`artifacts/half-patterns/` 下生成 `patterns.png`、`transfer_functions.png` 和 `transfer_functions_linear.png`。
+后两幅图分别显示第一套方法与 linear Ewald 的两组 WOTF，使用相同布局和坐标范围；
+均展示 `kz=0`、`kx=0`、`ky=0` 三个正交切片，同一通道在两种图案、两种方法之间共用色标，单位 μm²。
+各切片按实际频率坐标等比例显示，`kz` 与 `kx`、`ky` 每 rad/μm 占相同长度；轴向切片自然较扁。
+通道使用分组标题，光源使用列标签，切片平面标在行侧，避免重复标题。
+色标采用对称对数映射、零点附近线性，以同时显示强 DC 与较弱的 cap 结构，保留数值和正负号。
+本例采用实 pupil 和奇数轴向网格，`H_real` 为纯虚、`H_imag` 为纯实（浮点误差除外），
+因此显示带符号的 `Im(H_real)`、`Re(H_imag)`，并打印另两个分量的残差；两者仍分别作用于散射势实部、虚部。
+图中频谱经过 `fftshift`，只裁剪显示范围，计算结果保留完整的未 shift 频谱。
+两个光源的非零模式权重均为 1，各自使用真实背景 `I0=sum(source*abs(pupil)**2)` 归一化。
+linear 与 finite/FFT 对应不同的轴向离散，图中差异包含线性落格误差。
+
+## 小球 forward 示例
+
+```bash
+uv run --locked python examples/forward_bead.py
+uv run --locked python examples/forward_bead.py --method ewald --axial linear
+```
+
+半径 0.75 μm 的均匀小球位于样品中央，`n_bead=1.331+2e-5j`、背景 `n_medium=1.33`，真空波长为 0.53 μm。
+散射势由 `F=(2π/λ)²*(n_medium²-n_bead²)` 得到；照明是 NA=0.75 的上半圆盘，探测是同 NA 的完整圆孔。
+网格 `(65,65,65)`、采样 `(0.25,0.15,0.15)` μm；横向周期边界，轴向补零并只展示中央有效区域。
+默认 FFT、双精度，可选 `--dtype float32`、`--method ewald --axial finite|linear`。
+
+输出 `artifacts/bead/bead_forward.png` 与 `bead_stack.npz`。图中两行分别为 `F_real` 和预测对比度，
+三列为正交切片，所有坐标按实际 μm 等比例显示，标题只标在首行。
+NPZ 包含 `F_real`、`F_imag`、`contrast`、`intensity`、`background` 和 `(dz,dy,dx)`；
+其中 `c=(I-I0)/I0`、`I=I0*(1+c)`。这项测试展示 WOTF 正向流程，不要求与精确球体散射或 Mie 理论一致。
+
 ## 独立物理验证与边界
 
 示例的 Born 参考逐层计算散射场，在样品外出射面累加，再传播到九个焦平面；不复用 WOTF 代码。

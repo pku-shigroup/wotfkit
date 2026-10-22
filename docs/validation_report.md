@@ -1,6 +1,6 @@
 # 独立 Born 验证报告
 
-复现日期：2026-10-22（Asia/Shanghai）。基于 wotfkit 0.1.1 的模块拆分工作区。环境：Python 3.12.13、JAX 0.12.0。本轮 81 项测试和两种精度的完整示例均在 CPU 运行。
+复现日期：2026-10-22（Asia/Shanghai）。基于 wotfkit 0.1.1 工作区。环境：Python 3.12.13、JAX 0.12.0。当前精简后的 5 项测试在 CPU 通过；下文保留独立 Born 示例和此前完整频谱实验的结果。
 依赖以仓库 `uv.lock` 为准；当前实现统一使用角空间频率 k，并支持局部精度上下文。
 
 ## 算例与参考
@@ -54,7 +54,8 @@ RMSE 和最大绝对误差均为无量纲对比度误差，不使用接近一的
 
 另外用 `(17,15,17)` 和 `(16,14,18)` 两种网格检查独立照明、探测孔径，采样间隔沿用前述各向异性设置。
 照明为带横向强度梯度的圆盘，pupil 同时含非单位幅度透过率及像差；具体构造见
-`tests/test_born.py::test_unequal_apertures_match_transfer_and_independent_born`。
+Git 提交 `2d227fd` 的 `tests/test_born.py::test_unequal_apertures_match_transfer_and_independent_born`。
+这一组是精简测试前的实验留档，不再属于当前 pytest 集合。
 下表对两个网格、两个传递通道取最大值；Born 列还对两种算法取最大值。
 
 | 精度 | 照明 NA | 探测 NA | FFT 与 finite 相对 L2 | 对独立线性 Born 相对 L2 |
@@ -110,11 +111,25 @@ uv run --locked python examples/validate_born.py --dtype float32
 uv build --offline
 ```
 
-实测 **81 项测试通过（CPU）**。覆盖两种精度、默认双精度、精度上下文嵌套/覆盖/异常恢复及 x64 配置恢复、奇偶非方形网格、
-各向异性采样、纯实/纯虚/混合样品、复 pupil、单个正入射与斜入射平面波、解析薄层符号与尺度、
-角空间频率网格、PGT 通道符号组合、直接相关求和、有限轴向核、Nyquist 和非法输入、单位/权重缩放及轴向落格收敛。
-新增统一入口与三种计算路径的一致性、完整传递函数比较、独立照明/探测 NA、孔径外光源 warning、
-自动与手动截断一致性及全部光源被丢弃后的零背景错误。
+当前实测 **5 项测试通过（CPU）**，按目的拆为五个独立脚本：
+
+1. `tests/test_precision.py`：默认双精度、单双精度切换、显式覆盖与 x64 配置恢复。
+2. `tests/test_born.py`：简单弱 Gaussian 的纯实、纯虚、混合散射势，对独立标量 Born 场传播的定量比较。
+3. `tests/test_source_clipping.py`：孔径外光源自动丢弃、每次一次 warning、与手动截断一致，以及零背景错误。
+4. `tests/test_axial_sampling.py`：基于实际 cap 波矢差的轴向 Nyquist 检查，上限以下接受、以上报错。
+5. `tests/test_bead_forward.py`：小球 WOTF 前向流程、通道叠加、焦平面对称性与吸收符号；不将其当作精确球体散射验证。
+
+第二项测试的相对 L2 如下，分母为各通道参考对比度范数：
+
+| 散射势 | float64 FFT | float64 finite | float32 FFT | float32 finite |
+| --- | ---: | ---: | ---: | ---: |
+| 纯实 | 1.928657e-14 | 1.926010e-14 | 1.654063e-06 | 1.640869e-06 |
+| 纯虚 | 7.994003e-16 | 7.985654e-16 | 2.073253e-07 | 1.507830e-07 |
+| 混合 | 5.744388e-15 | 5.743372e-15 | 5.148793e-07 | 5.069500e-07 |
+
+双精度阈值 `1e-10`，单精度阈值 `1e-4`。linear 不使用精确算子的阈值验收，其误差与收敛由上面的独立示例报告。
+第四项使用正入射和当前采样 pupil，计算出 `dz < 1.96045 μm`，分别在上限的 0.9 倍和 1.1 倍检查三种计算路径。
+原先的 81 项参数化测试已由以上五项替代；原核查、频谱比较与收敛数据作为实验记录保留。
 
 机器可读原始结果：[双精度](validation/metrics_float64.json)、[单精度](validation/metrics_float32.json)。
 示例运行还在 `artifacts/` 下生成对应 JSON 和 PNG，图像不需要联网生成。
