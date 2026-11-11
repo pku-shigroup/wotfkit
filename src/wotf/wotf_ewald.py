@@ -25,11 +25,11 @@ def _axial_kernel(delta_kz, kz, dz):
     )
 
 
-@jax.jit(static_argnames=("shape", "axial"))
+@jax.jit(static_argnames=("shape", "axial", "output"))
 def _ewald_kernel(
     source_weights, source_pupil, source_kz, source_y, source_x,
     detector_pupil, detector_kz, detector_y, detector_x,
-    kz, dz, background, *, shape, axial,
+    kz, dz, background, *, shape, axial, output,
 ):
     nz, ny, nx = shape
 
@@ -59,6 +59,8 @@ def _ewald_kernel(
         jnp.zeros(shape, dtype=detector_pupil.dtype),
     )
     reverse = _conjugate_reverse(cross)
+    if output == "pair":
+        return cross, reverse
     H_real = -1j * (cross - reverse)
     H_imag = cross + reverse
     return H_real, H_imag
@@ -66,9 +68,9 @@ def _ewald_kernel(
 
 def wotf_ewald(
     shape, spacing, *, wavelength, n_medium, source, pupil,
-    axial="finite", dtype=None,
+    axial="finite", dtype=None, output="tfs",
 ):
-    """Return (H_real, H_imag) by translating and accumulating Ewald caps.
+    """Return scattering-potential WOTFs or their accumulated Ewald pair.
 
     Parameters, units and ordering match :func:`wotf_fft`. Source is a 2D
     array of incoherent intensity weights; pupil is the 2D complex detection
@@ -80,10 +82,24 @@ def wotf_ewald(
     with total axial-kernel weight 2*pi/dkz. The latter is an approximation
     whose error must be checked by increasing axial extent.
     No illumination direction is rounded: source modes are grid cells.
+
+    ``output='tfs'`` (default) returns (H_real, H_imag), acting on the real
+    and imaginary parts of F. ``output='pair'`` returns (C(k), conj(C(-k))),
+    with reflection along all three FFT axes, including even-grid Nyquist
+    points. C is the single-sided cap sum before channel assembly; it
+    includes background normalization and axial integration weights, but
+    does not include the Born factor -1j. Recover the channels with
+    H_real = -1j*(C - reverse), H_imag = C + reverse.
+
+    Both outputs are pairs of complex JAX arrays, shape (nz, ny, nx), in
+    unshifted FFT order and units length**2. Pass the assembled channels,
+    rather than the raw pair, to predict_contrast.
     """
     real, _ = _precision(dtype)
     if axial not in ("finite", "linear"):
         raise ValueError('axial must be "finite" or "linear"')
+    if output not in ("tfs", "pair"):
+        raise ValueError('output must be "tfs" or "pair"')
     with jax.enable_x64(real == jnp.float64):
         source, pupil, kz_modes, background, si, vi = _prepare(
             shape, spacing, wavelength, n_medium, source, pupil, dtype
@@ -93,5 +109,5 @@ def wotf_ewald(
             source[si], pupil[si], kz_modes[si], *si,
             pupil[vi], kz_modes[vi], *vi,
             kz, jnp.asarray(spacing[0], real), background,
-            shape=tuple(shape), axial=axial,
+            shape=tuple(shape), axial=axial, output=output,
         )

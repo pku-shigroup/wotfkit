@@ -1,6 +1,6 @@
 # 独立 Born 验证报告
 
-复现日期：2026-10-22（Asia/Shanghai）。基于 wotfkit 0.1.1 工作区。环境：Python 3.12.13、JAX 0.12.0。当前精简后的 5 项测试在 CPU 通过；下文保留独立 Born 示例和此前完整频谱实验的结果。
+Born 数值记录日期：2026-10-22；pair 接口与回归测试更新：2026-11-11（Asia/Shanghai）。基于 wotfkit 0.1.1 工作区。环境：Python 3.12.13、JAX 0.12.0。下文保留独立 Born 示例和此前完整频谱实验的结果。
 依赖以仓库 `uv.lock` 为准；当前实现统一使用角空间频率 k，并支持局部精度上下文。
 
 ## 算例与参考
@@ -111,13 +111,14 @@ uv run --locked python examples/validate_born.py --dtype float32
 uv build --offline
 ```
 
-当前实测 **5 项测试通过（CPU）**，按目的拆为五个独立脚本：
+当前实测 **6 项测试通过（CPU，13.68 s）**，按目的拆为六个独立脚本：
 
 1. `tests/test_precision.py`：默认双精度、单双精度切换、显式覆盖与 x64 配置恢复。
 2. `tests/test_born.py`：简单弱 Gaussian 的纯实、纯虚、混合散射势，对独立标量 Born 场传播的定量比较。
 3. `tests/test_source_clipping.py`：孔径外光源自动丢弃、每次一次 warning、与手动截断一致，以及零背景错误。
 4. `tests/test_axial_sampling.py`：基于实际 cap 波矢差的轴向 Nyquist 检查，上限以下接受、以上报错。
 5. `tests/test_bead_forward.py`：小球 WOTF 前向流程、通道叠加、焦平面对称性与吸收符号；不将其当作精确球体散射验证。
+6. `tests/test_ewald_pair.py`：finite/linear、单双精度、奇偶网格的 pair 输出与统一入口；验证三轴共轭反射、非零偶数 Nyquist 点、通道重组和默认输出，finite 单边项与独立 FFT 结果比较。
 
 第二项测试的相对 L2 如下，分母为各通道参考对比度范数：
 
@@ -129,7 +130,17 @@ uv build --offline
 
 双精度阈值 `1e-10`，单精度阈值 `1e-4`。linear 不使用精确算子的阈值验收，其误差与收敛由上面的独立示例报告。
 第四项使用正入射和当前采样 pupil，计算出 `dz < 1.96045 μm`，分别在上限的 0.9 倍和 1.1 倍检查三种计算路径。
-原先的 81 项参数化测试已由以上五项替代；原核查、频谱比较与收敛数据作为实验记录保留。
+原先的 81 项参数化测试由五项核心测试替代，新增 pair 功能使用单独的第六项回归测试；原核查、频谱比较与收敛数据作为实验记录保留。
+
+pair 返回已归一化的 `(C(k),conj(C(-k)))`，两项均为完整复数频谱，单位长度²，尚未乘通道组合的 `-1j`。
+默认 `output="tfs"` 返回定义和数值不变；直接调用与统一入口均支持 pair，FFT 请求 pair 时明确报错。
+
+2026-11-11 的额外直接求和核查使用 `(4,15,17)` 和 `(17,14,18)` 两种网格、复 pupil、非对称照明，
+覆盖 finite/linear 和单双精度，共 8 组；四层网格取 `dz=1.75 μm`，使合法 cap 的落格包含非零 Nyquist 点。
+直接参考独立计算传播波矢、光源/检测点求和和轴向指数和或线性落格，不调用 WOTF 内部核。
+单边项对参考的最大相对 L2 为双精度 `9.630853e-16`、单精度 `7.678356e-7`。
+共轭对重组通道及默认输出与修改前 HEAD 的最大绝对差均为零；这些数值来自实际修正后的代码，未在进程内替换计算核。
+原始结果由本次运行保存在 `artifacts/pair-output/metrics.json`。
 
 机器可读原始结果：[双精度](validation/metrics_float64.json)、[单精度](validation/metrics_float32.json)。
 示例运行还在 `artifacts/` 下生成对应 JSON 和 PNG，图像不需要联网生成。

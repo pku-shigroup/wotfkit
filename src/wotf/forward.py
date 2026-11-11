@@ -10,22 +10,29 @@ from .wotf_fft import wotf_fft
 
 def compute_wotf(
     shape, spacing, *, wavelength, n_medium, source, pupil,
-    method="fft", axial="finite", dtype=None,
+    method="fft", axial="finite", dtype=None, output="tfs",
 ):
-    """Return (H_real, H_imag) using 'fft' (default) or 'ewald'.
+    """Compute FFT/Ewald WOTFs, optionally returning the raw Ewald pair.
 
     All optical parameters follow :func:`wotf_fft`. ``axial`` selects
     'finite' or 'linear' for Ewald only; it is ignored for FFT.
     Precision follows the current precision() block unless dtype is given.
+
+    ``output='tfs'`` returns (H_real, H_imag) for either method. Ewald also
+    supports ``output='pair'`` for (C(k), conj(C(-k))); see wotf_ewald for
+    its normalization, units and channel reconstruction. FFT supports
+    only 'tfs'; requesting a raw Ewald pair from FFT raises ValueError.
     """
     optics = dict(
         wavelength=wavelength, n_medium=n_medium,
         source=source, pupil=pupil, dtype=dtype,
     )
     if method == "fft":
+        if output != "tfs":
+            raise ValueError('FFT supports only output="tfs"; use method="ewald" for output="pair"')
         return wotf_fft(shape, spacing, **optics)
     if method == "ewald":
-        return wotf_ewald(shape, spacing, **optics, axial=axial)
+        return wotf_ewald(shape, spacing, **optics, axial=axial, output=output)
     raise ValueError('method must be "fft" or "ewald"')
 
 

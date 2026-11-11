@@ -116,6 +116,10 @@ H_R=-i[C-C^*(-f)],\quad H_I=C+C^*(-f),\qquad
 \widehat c=H_R\widehat F_R+H_I\widehat F_I.
 $$
 
+当前角空间频率接口的 `wotf_ewald(..., output="pair")` 直接返回 `(C(k),conj(C(-k)))`，
+负频率反射包含三个轴。C 已包含真实背景归一化和轴向积分权重，不包含通道组合的 `-i`；
+默认 `output="tfs"` 返回上式的两个通道。统一入口 `compute_wotf(method="ewald", output="pair", ...)` 使用相同定义。
+
 `H_R` 不是 `real(C)`，`H_I` 也不是 `imag(C)`。普遍成立的约束是两个通道各自
 Hermitian，因而实样品得到实强度。仅在实 pupil 和适当的轴向对称性等额外条件下，
 才能要求 `H_R` 纯虚、`H_I` 纯实。复 pupil 或偶数轴向有限窗口一般不满足该简化。
@@ -204,7 +208,7 @@ $$
 多个平面波的强度分别计算后非相干相加。
 
 分别比较线性参考、保留 `|us|²` 的一阶 Born 强度；误差分母是对比度信号，不是接近一的总强度。
-此前的薄层解析、长度单位缩放及光源缩放核查额外约束了绝对符号和尺度；当前 pytest 收拢为四项核心行为和小球前向检查。
+此前的薄层解析、长度单位缩放及光源缩放核查额外约束了绝对符号和尺度；当前 pytest 包括四项核心行为、小球前向及 pair 输出检查。
 完整结果见 [validation_report.md](validation_report.md)。
 
 边界与限制：

@@ -44,6 +44,25 @@ with precision("float64"):
 `compute_wotf` 默认 `method="fft"`；选择 `method="ewald"` 后可用 `axial="finite"`（默认）
 或 `axial="linear"`。`axial` 在 FFT 方法下不生效。仍可从 `wotf` 直接导入 `wotf_fft`、`wotf_ewald` 调用。
 
+Ewald 可单独返回累加后的共轭反射对：
+
+```python
+with precision("float64"):
+    C, C_reverse = compute_wotf(
+        shape, spacing, **optics, method="ewald", axial="finite", output="pair",
+    )
+    H_real = -1j * (C - C_reverse)
+    H_imag = C + C_reverse
+    c = predict_contrast(F_real, F_imag, H_real, H_imag)
+```
+
+也可直接调用 `wotf_ewald(..., output="pair")`，finite 和 linear 均支持。
+默认 `output="tfs"` 仍返回 `(H_real,H_imag)`，原有调用无需增加参数。
+pair 返回 `(C(k),conj(C(-k)))`，负频率反射作用于三个轴，不是同一点的 `conj(C(k))`。
+两项均为所选精度的复数 JAX 数组，形状 `(nz,ny,nx)`，未 shift，单位长度²；
+已包含 `I0` 背景归一化和轴向积分权重，但不包含通道组合中的 `-1j`。
+使用 pair 做预测前应按上式组装通道；FFT 仅支持 `output="tfs"`，请求 pair 会明确报错。
+
 数值函数返回 `jax.Array`。无上下文时默认双精度：实数为 `float64`，传递函数为 `complex128`。
 `with precision("float32"):` 中使用 `float32/complex64`，也会让块内普通 JAX 数组默认使用单精度。
 精度优先级为**单次调用的 `dtype=` → 当前 `precision` 上下文 → 默认双精度**；
@@ -103,7 +122,7 @@ Ewald 的单边系数为 `source*conj(P_source)*P_detector/(2*kz_detector*I0)`�
 
 ## 测试
 
-`tests/` 按目的拆为五个脚本，每个脚本保留一项测试：
+`tests/` 按目的拆为独立脚本，每个脚本保留一项测试：
 
 | 脚本 | 检查内容 |
 | --- | --- |
@@ -112,6 +131,7 @@ Ewald 的单边系数为 `source*conj(P_source)*P_detector/(2*kz_detector*I0)`�
 | [test_source_clipping.py](tests/test_source_clipping.py) | 超出 pupil 的照明自动丢弃、一次 warning、结果与手动清零一致，以及全部被丢弃后的零背景错误。 |
 | [test_axial_sampling.py](tests/test_axial_sampling.py) | 从实际波矢差计算允许的 dz，确认上限以下可计算、上限以上三种路径均报错。 |
 | [test_bead_forward.py](tests/test_bead_forward.py) | 小球 WOTF 前向预测非零且有限、通道可叠加、焦平面相位响应的奇对称和吸收响应的偶对称及负均值。 |
+| [test_ewald_pair.py](tests/test_ewald_pair.py) | finite/linear、单双精度、奇偶网格的 pair 输出、共轭反射、通道重组、默认输出及统一入口；finite 单边项与独立 FFT 结果比较。 |
 
 可单独运行，例如 `uv run --locked pytest tests/test_born.py -q`；运行全部测试使用 `uv run --locked pytest -q`。
 
