@@ -1,7 +1,9 @@
 # 独立 Born 验证报告
 
-Born 数值记录日期：2026-10-22；pair 接口与回归测试更新：2026-11-11（Asia/Shanghai）。基于 wotfkit 0.1.1 工作区。环境：Python 3.12.13、JAX 0.12.0。下文保留独立 Born 示例和此前完整频谱实验的结果。
-依赖以仓库 `uv.lock` 为准；当前实现统一使用角空间频率 k，并支持局部精度上下文。
+当前版本：wotfkit 0.2.0。Born 历史数值于 0.1.1 工作区、2026-10-22 记录；pair 接口及原生 JAX 精度回归于 2026-11-11 更新（Asia/Shanghai）。环境：Python 3.12.13、JAX 0.12.0。下文保留独立 Born 示例和此前完整频谱实验的结果。
+依赖以仓库 `uv.lock` 为准；当前实现统一使用角空间频率 k，数值类型直接遵循外部 JAX 配置和输入类型。
+下面的旧数值表和 JSON 为移除精度管理前的历史记录：其中单精度预测使用双精度参考。
+当前 Born 示例的参考与预测均遵循启动配置，JSON 中的 `reference_dtype` 记录实际精度。
 
 ## 算例与参考
 
@@ -105,22 +107,24 @@ Git 提交 `2d227fd` 的 `tests/test_born.py::test_unequal_apertures_match_trans
 
 ```bash
 uv sync --locked
-uv run --locked pytest -q
-uv run --locked python examples/validate_born.py --dtype float64
-uv run --locked python examples/validate_born.py --dtype float32
+JAX_ENABLE_X64=0 uv run --locked pytest -q
+JAX_ENABLE_X64=1 uv run --locked pytest -q
+uv run --locked python examples/validate_born.py
+JAX_ENABLE_X64=1 uv run --locked python examples/validate_born.py --output artifacts/born-float64
 uv build --offline
 ```
 
-当前实测 **6 项测试通过（CPU，13.68 s）**，按目的拆为六个独立脚本：
+移除精度管理后，分别在 `JAX_ENABLE_X64=0` 和 `JAX_ENABLE_X64=1` 下运行，均为 **6 项测试通过（CPU）**。测试按目的拆为六个独立脚本：
 
-1. `tests/test_precision.py`：默认双精度、单双精度切换、显式覆盖与 x64 配置恢复。
+1. `tests/test_precision.py`：遵循外部 JAX x64 配置，检查实数 pupil、混合输入与 Ewald 累加器类型，确认导入和调用不改变配置。
 2. `tests/test_born.py`：简单弱 Gaussian 的纯实、纯虚、混合散射势，对独立标量 Born 场传播的定量比较。
 3. `tests/test_source_clipping.py`：孔径外光源自动丢弃、每次一次 warning、与手动截断一致，以及零背景错误。
 4. `tests/test_axial_sampling.py`：基于实际 cap 波矢差的轴向 Nyquist 检查，上限以下接受、以上报错。
 5. `tests/test_bead_forward.py`：小球 WOTF 前向流程、通道叠加、焦平面对称性与吸收符号；不将其当作精确球体散射验证。
 6. `tests/test_ewald_pair.py`：finite/linear、单双精度、奇偶网格的 pair 输出与统一入口；验证三轴共轭反射、非零偶数 Nyquist 点、通道重组和默认输出，finite 单边项与独立 FFT 结果比较。
 
-第二项测试的相对 L2 如下，分母为各通道参考对比度范数：
+第二项测试使用测试代码中的原生 JAX 上下文建立独立双精度参考；库和参考模型都不切换精度。
+本次结果与原数值表一致，相对 L2 如下，分母为各通道参考对比度范数：
 
 | 散射势 | float64 FFT | float64 finite | float32 FFT | float32 finite |
 | --- | ---: | ---: | ---: | ---: |
@@ -131,6 +135,18 @@ uv build --offline
 双精度阈值 `1e-10`，单精度阈值 `1e-4`。linear 不使用精确算子的阈值验收，其误差与收敛由上面的独立示例报告。
 第四项使用正入射和当前采样 pupil，计算出 `dz < 1.96045 μm`，分别在上限的 0.9 倍和 1.1 倍检查三种计算路径。
 原先的 81 项参数化测试由五项核心测试替代，新增 pair 功能使用单独的第六项回归测试；原核查、频谱比较与收敛数据作为实验记录保留。
+
+三个示例均已分别在两种启动配置下运行，实际输出为 float32/complex64 和 float64/complex128。
+当前 Born 示例的参考与预测使用相同的外部配置，混合散射势算例对线性参考的相对 L2 为：
+
+| 预测/参考精度 | FFT | Ewald finite |
+| --- | ---: | ---: |
+| float32 / float32 | 2.964977e-6 | 2.989072e-6 |
+| float64 / float64 | 5.744388e-15 | 5.743372e-15 |
+
+这张表与上面的双精度参考测试使用不同的参考精度，应分别解读。
+本次示例结果保存在 `artifacts/native-born-float32/`、`artifacts/native-born-float64/`；
+README 的独立双精度示例也已实际运行，网格为 float64、pupil/WOTF 为 complex128、预测对比度为 float64。
 
 pair 返回已归一化的 `(C(k),conj(C(-k)))`，两项均为完整复数频谱，单位长度²，尚未乘通道组合的 `-1j`。
 默认 `output="tfs"` 返回定义和数值不变；直接调用与统一入口均支持 pair，FFT 请求 pair 时明确报错。

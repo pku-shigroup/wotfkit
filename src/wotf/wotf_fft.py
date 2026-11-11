@@ -3,7 +3,7 @@
 import jax
 import jax.numpy as jnp
 
-from ._common import _precision, _prepare
+from ._common import _prepare
 
 
 @jax.jit
@@ -31,7 +31,7 @@ def _fft_kernel(source, pupil, kz, z_lag, dz, km, background):
 
 
 def wotf_fft(
-    shape, spacing, *, wavelength, n_medium, source, pupil, dtype=None
+    shape, spacing, *, wavelength, n_medium, source, pupil
 ):
     """Return (H_real, H_imag) by FFT correlation, both in FFT order.
 
@@ -47,14 +47,12 @@ def wotf_fft(
     H implements circular convolution; pad z and crop when modeling a
     finite specimen. See the independent Born example for a guarded ROI.
     """
-    real, _ = _precision(dtype)
-    with jax.enable_x64(real == jnp.float64):
-        source, pupil, kz, background, _, _ = _prepare(
-            shape, spacing, wavelength, n_medium, source, pupil, dtype
-        )
-        dz = jnp.asarray(spacing[0], real)
-        z_lag = jnp.fft.ifftshift((jnp.arange(shape[0], dtype=real) - shape[0] // 2) * dz)
-        return _fft_kernel(
-            source, pupil, kz, z_lag, dz,
-            jnp.asarray(2 * jnp.pi * n_medium / wavelength, real), background,
-        )
+    source, pupil, kz, background, _, _ = _prepare(
+        shape, spacing, wavelength, n_medium, source, pupil
+    )
+    dz = jnp.asarray(spacing[0])
+    z_lag = jnp.fft.ifftshift((jnp.arange(shape[0]) - shape[0] // 2) * dz)
+    return _fft_kernel(
+        source, pupil, kz, z_lag, dz,
+        jnp.asarray(2 * jnp.pi * n_medium / wavelength), background,
+    )

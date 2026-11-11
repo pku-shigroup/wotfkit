@@ -1,13 +1,15 @@
 # wotfkit
 
 使用 JAX 计算三维弱散射传递函数，Python 导入名为 `wotf`。提供 FFT 互相关与 Ewald cap 两种算法，
-默认双精度，可选单精度；参数显式传入，不依赖 `WOTFconfig`。
+精度遵循 JAX 配置与输入类型（通常为单精度）；参数显式传入，不依赖 `WOTFconfig`。
+
+`0.2.0` 移除了库内精度管理，双精度通过 JAX 原生配置启用，见下方完整示例。
 
 ```bash
 uv sync --locked
 uv run --locked pytest -q
-uv run --locked python examples/validate_born.py --dtype float64
-uv run --locked python examples/validate_born.py --dtype float32
+uv run --locked python examples/validate_born.py
+JAX_ENABLE_X64=1 uv run --locked python examples/validate_born.py --output artifacts/born-float64
 ```
 
 要求 Python ≥3.12，依赖由 `pyproject.toml` 和 `uv.lock` 管理，开发环境包括 pytest、Matplotlib。
@@ -18,27 +20,25 @@ uv run --locked python examples/validate_born.py --dtype float32
 
 ```python
 import jax.numpy as jnp
-from wotf import precision, k_axes, circular_pupil, compute_wotf, predict_contrast
+from wotf import k_axes, circular_pupil, compute_wotf, predict_contrast
 
 shape = (33, 31, 35)                  # (nz, ny, nx)
 spacing = (0.35, 0.20, 0.18)          # (dz, dy, dx), 样品空间 um
 
-# 精度只选一次；改为 "float32" 即使用单精度。
-with precision("float64"):
-    kz, ky, kx = k_axes(shape, spacing)  # rad/um，未 shift
-    # 照明 NA = 0.35，探测 NA = 0.6；照明只传强度 source。
-    source = (
-        ky[:, None]**2 + kx[None, :]**2 <= (2 * jnp.pi * 0.35 / 0.53)**2
-    ).astype(ky.dtype)
-    pupil = circular_pupil(ky, kx, wavelength=0.53, na=0.6)
-    F_real = jnp.zeros(shape).at[16, 15, 17].set(-0.01)
-    F_imag = jnp.zeros_like(F_real)
+kz, ky, kx = k_axes(shape, spacing)  # rad/um，未 shift
+# 照明 NA = 0.35，探测 NA = 0.6；照明只传强度 source。
+source = (
+    ky[:, None]**2 + kx[None, :]**2 <= (2 * jnp.pi * 0.35 / 0.53)**2
+).astype(ky.dtype)
+pupil = circular_pupil(ky, kx, wavelength=0.53, na=0.6)
+F_real = jnp.zeros(shape).at[16, 15, 17].set(-0.01)
+F_imag = jnp.zeros_like(F_real)
 
-    optics = dict(wavelength=0.53, n_medium=1.33, source=source, pupil=pupil)
-    H_real, H_imag = compute_wotf(shape, spacing, **optics)  # method="fft"
-    H_ewald = compute_wotf(shape, spacing, **optics, method="ewald", axial="finite")
-    c = predict_contrast(F_real, F_imag, H_real, H_imag)
-    # absolute_intensity = I0 * (1 + c), I0 = sum(source * abs(pupil)**2)
+optics = dict(wavelength=0.53, n_medium=1.33, source=source, pupil=pupil)
+H_real, H_imag = compute_wotf(shape, spacing, **optics)  # method="fft"
+H_ewald = compute_wotf(shape, spacing, **optics, method="ewald", axial="finite")
+c = predict_contrast(F_real, F_imag, H_real, H_imag)
+# absolute_intensity = I0 * (1 + c), I0 = sum(source * abs(pupil)**2)
 ```
 
 `compute_wotf` 默认 `method="fft"`；选择 `method="ewald"` 后可用 `axial="finite"`（默认）
@@ -47,28 +47,54 @@ with precision("float64"):
 Ewald 可单独返回累加后的共轭反射对：
 
 ```python
-with precision("float64"):
-    C, C_reverse = compute_wotf(
-        shape, spacing, **optics, method="ewald", axial="finite", output="pair",
-    )
-    H_real = -1j * (C - C_reverse)
-    H_imag = C + C_reverse
-    c = predict_contrast(F_real, F_imag, H_real, H_imag)
+C, C_reverse = compute_wotf(
+    shape, spacing, **optics, method="ewald", axial="finite", output="pair",
+)
+H_real = -1j * (C - C_reverse)
+H_imag = C + C_reverse
+c = predict_contrast(F_real, F_imag, H_real, H_imag)
 ```
 
 也可直接调用 `wotf_ewald(..., output="pair")`，finite 和 linear 均支持。
 默认 `output="tfs"` 仍返回 `(H_real,H_imag)`，原有调用无需增加参数。
 pair 返回 `(C(k),conj(C(-k)))`，负频率反射作用于三个轴，不是同一点的 `conj(C(k))`。
-两项均为所选精度的复数 JAX 数组，形状 `(nz,ny,nx)`，未 shift，单位长度²；
+两项均为遵循 JAX 类型提升的复数 JAX 数组，形状 `(nz,ny,nx)`，未 shift，单位长度²；
 已包含 `I0` 背景归一化和轴向积分权重，但不包含通道组合中的 `-1j`。
 使用 pair 做预测前应按上式组装通道；FFT 仅支持 `output="tfs"`，请求 pair 会明确报错。
 
-数值函数返回 `jax.Array`。无上下文时默认双精度：实数为 `float64`，传递函数为 `complex128`。
-`with precision("float32"):` 中使用 `float32/complex64`，也会让块内普通 JAX 数组默认使用单精度。
-精度优先级为**单次调用的 `dtype=` → 当前 `precision` 上下文 → 默认双精度**；
-`dtype=None` 表示沿用上下文。上下文可嵌套，退出时恢复原精度和 JAX x64 配置，包括异常退出。
-导入和调用不会永久改变 JAX 的 x64 配置。底层使用 [JAX 的局部 x64 上下文](https://docs.jax.dev/en/latest/_autosummary/jax.enable_x64.html)。
-调用前已在单精度中创建的输入，其丢失的信息无法通过后续双精度转换恢复。
+数值函数返回 `jax.Array`，类型由 JAX 配置和输入数组的类型提升规则决定。
+JAX 未启用 x64 时通常为 `float32/complex64`；外部已启用 x64 时，新建网格通常为 `float64`。
+库不会设置、关闭或恢复 JAX 的精度开关，也不统一转换输入的精度。
+实数 pupil 会转为复振幅，Ewald 累加器随参与运算的数组类型提升，避免混合输入被降精度。
+
+## 双精度示例
+
+在程序开头启用 x64，再创建输入数组和调用库：
+
+```python
+import jax
+jax.config.update("jax_enable_x64", True)
+
+import jax.numpy as jnp
+from wotf import k_axes, circular_pupil, compute_wotf, predict_contrast
+
+shape, spacing = (17, 15, 17), (0.35, 0.25, 0.22)
+kz, ky, kx = k_axes(shape, spacing)
+pupil = circular_pupil(ky, kx, wavelength=0.53, na=0.6)
+source = jnp.zeros(shape[1:]).at[0, 0].set(1)
+H_real, H_imag = compute_wotf(
+    shape, spacing, wavelength=0.53, n_medium=1.33,
+    source=source, pupil=pupil, method="ewald",
+)
+F_real = jnp.zeros(shape).at[8, 7, 8].set(-0.01)
+c = predict_contrast(F_real, jnp.zeros_like(F_real), H_real, H_imag)
+print(kz.dtype, pupil.dtype, H_real.dtype, c.dtype)
+# float64 complex128 complex128 float64
+```
+
+命令行也可用 `JAX_ENABLE_X64=1 uv run --locked python examples/half_patterns.py`。
+应在创建数组之前启用双精度；后续转换不能恢复单精度输入已经丢失的信息。
+
 接口按课题组内部使用设计，假定输入满足下述形状、单位和取值约定；不逐项检查类型、有限性或 Hermitian 对称性。
 WOTF 计算仅保留非零背景、传播模式和 Nyquist 检查。内部固定形状计算核使用 JIT。
 
@@ -126,7 +152,7 @@ Ewald 的单边系数为 `source*conj(P_source)*P_detector/(2*kz_detector*I0)`�
 
 | 脚本 | 检查内容 |
 | --- | --- |
-| [test_precision.py](tests/test_precision.py) | 默认双精度、单双精度切换、显式覆盖和 JAX x64 配置恢复；覆盖 FFT、finite、linear。 |
+| [test_precision.py](tests/test_precision.py) | 遵循原生 JAX x64 配置，检查网格、实数 pupil、混合输入、累加器和输出类型；导入及调用不改变配置。 |
 | [test_born.py](tests/test_born.py) | 弱 Gaussian 散射势的纯实、纯虚、混合情况；FFT 和 finite 与独立双精度标量 Born 场传播比较。 |
 | [test_source_clipping.py](tests/test_source_clipping.py) | 超出 pupil 的照明自动丢弃、一次 warning、结果与手动清零一致，以及全部被丢弃后的零背景错误。 |
 | [test_axial_sampling.py](tests/test_axial_sampling.py) | 从实际波矢差计算允许的 dz，确认上限以下可计算、上限以上三种路径均报错。 |
@@ -150,7 +176,7 @@ uv run --locked python examples/half_patterns.py --method ewald --axial finite
 探测使用 NA=0.75 的完整圆孔，照明分别是 NA≤0.75 的半圆盘和 0.5≤NA≤0.75 的半环，
 都取 `ky >= 0` 的上半平面，包括直径边界。真空波长为 0.53 μm，介质折射率为 1.33，
 网格 `(129,129,129)`、样品空间采样 `(0.35,0.15,0.15)` μm；横向可容纳照明与探测的最大波矢差。
-默认同时计算 FFT 和线性落格 Ewald，使用双精度；可通过 `--dtype float32` 切换精度，`--output PATH` 指定输出目录。
+默认同时计算 FFT 和线性落格 Ewald，精度由启动时的 JAX 配置决定；`--output PATH` 指定输出目录。
 `--method ewald --axial finite` 将第一套结果改为 finite Ewald，第二套仍为 linear Ewald。
 
 `artifacts/half-patterns/` 下生成 `patterns.png`、`transfer_functions.png` 和 `transfer_functions_linear.png`。
@@ -175,7 +201,7 @@ uv run --locked python examples/forward_bead.py --method ewald --axial linear
 半径 0.75 μm 的均匀小球位于样品中央，`n_bead=1.331+2e-5j`、背景 `n_medium=1.33`，真空波长为 0.53 μm。
 散射势由 `F=(2π/λ)²*(n_medium²-n_bead²)` 得到；照明是 NA=0.75 的上半圆盘，探测是同 NA 的完整圆孔。
 网格 `(65,65,65)`、采样 `(0.25,0.15,0.15)` μm；横向周期边界，轴向补零并只展示中央有效区域。
-默认 FFT、双精度，可选 `--dtype float32`、`--method ewald --axial finite|linear`。
+默认 FFT，精度由启动时的 JAX 配置决定；可选 `--method ewald --axial finite|linear`。
 
 输出 `artifacts/bead/bead_forward.png` 与 `bead_stack.npz`。图中两行分别为 `F_real` 和预测对比度，
 三列为正交切片，所有坐标按实际 μm 等比例显示，标题只标在首行。
@@ -186,8 +212,10 @@ NPZ 包含 `F_real`、`F_imag`、`contrast`、`intensity`、`background` 和 `(d
 
 示例的 Born 参考逐层计算散射场，在样品外出射面累加，再传播到九个焦平面；不复用 WOTF 代码。
 同时比较线性强度与含 `|us|²` 的一阶 Born 强度。`--output PATH` 可指定输出目录，默认输出
-`artifacts/born-float64/` 或 `artifacts/born-float32/` 中的 `metrics.json`、`comparison.png`、`profiles.png`。
-参考统一使用双精度，便于独立衡量单精度预测误差；JSON 另外报告 FFT 与 finite Ewald 两个完整传递通道的差异。
+`artifacts/born/` 中的 `metrics.json`、`comparison.png`、`profiles.png`。
+示例的 Born 参考和 WOTF 预测均遵循外部 JAX 配置，JSON 记录实际的 `dtype`、`reference_dtype`，
+并报告 FFT 与 finite Ewald 两个完整传递通道的差异。pytest 则用原生 JAX 上下文单独建立双精度 Born 参考，
+用于衡量单精度预测误差；库和示例都不切换精度。
 
 横向采用周期样品；3D 频域预测本身是循环卷积。有限轴向样品需补零，使观察位置与样品位置之差
 全部落在计算的 lag 范围内，再裁剪有效区域。示例物体仅占中央五层，比较中央九个焦平面。

@@ -3,7 +3,7 @@
 import jax
 import jax.numpy as jnp
 
-from ._common import _precision, _prepare, k_axes
+from ._common import _prepare, k_axes
 
 
 def _conjugate_reverse(spectrum):
@@ -56,7 +56,7 @@ def _ewald_kernel(
 
     cross = jax.lax.fori_loop(
         0, source_weights.size, accumulate,
-        jnp.zeros(shape, dtype=detector_pupil.dtype),
+        jnp.zeros(shape, dtype=jnp.result_type(source_weights, detector_pupil, kz, dz)),
     )
     reverse = _conjugate_reverse(cross)
     if output == "pair":
@@ -68,7 +68,7 @@ def _ewald_kernel(
 
 def wotf_ewald(
     shape, spacing, *, wavelength, n_medium, source, pupil,
-    axial="finite", dtype=None, output="tfs",
+    axial="finite", output="tfs",
 ):
     """Return scattering-potential WOTFs or their accumulated Ewald pair.
 
@@ -95,19 +95,17 @@ def wotf_ewald(
     unshifted FFT order and units length**2. Pass the assembled channels,
     rather than the raw pair, to predict_contrast.
     """
-    real, _ = _precision(dtype)
     if axial not in ("finite", "linear"):
         raise ValueError('axial must be "finite" or "linear"')
     if output not in ("tfs", "pair"):
         raise ValueError('output must be "tfs" or "pair"')
-    with jax.enable_x64(real == jnp.float64):
-        source, pupil, kz_modes, background, si, vi = _prepare(
-            shape, spacing, wavelength, n_medium, source, pupil, dtype
-        )
-        kz, _, _ = k_axes(shape, spacing, dtype=dtype)
-        return _ewald_kernel(
-            source[si], pupil[si], kz_modes[si], *si,
-            pupil[vi], kz_modes[vi], *vi,
-            kz, jnp.asarray(spacing[0], real), background,
-            shape=tuple(shape), axial=axial, output=output,
-        )
+    source, pupil, kz_modes, background, si, vi = _prepare(
+        shape, spacing, wavelength, n_medium, source, pupil
+    )
+    kz, _, _ = k_axes(shape, spacing)
+    return _ewald_kernel(
+        source[si], pupil[si], kz_modes[si], *si,
+        pupil[vi], kz_modes[vi], *vi,
+        kz, jnp.asarray(spacing[0]), background,
+        shape=tuple(shape), axial=axial, output=output,
+    )

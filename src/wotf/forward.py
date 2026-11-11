@@ -3,20 +3,19 @@
 import jax
 import jax.numpy as jnp
 
-from ._common import _precision
 from .wotf_ewald import wotf_ewald
 from .wotf_fft import wotf_fft
 
 
 def compute_wotf(
     shape, spacing, *, wavelength, n_medium, source, pupil,
-    method="fft", axial="finite", dtype=None, output="tfs",
+    method="fft", axial="finite", output="tfs",
 ):
     """Compute FFT/Ewald WOTFs, optionally returning the raw Ewald pair.
 
     All optical parameters follow :func:`wotf_fft`. ``axial`` selects
     'finite' or 'linear' for Ewald only; it is ignored for FFT.
-    Precision follows the current precision() block unless dtype is given.
+    Numeric types follow JAX configuration and input type promotion.
 
     ``output='tfs'`` returns (H_real, H_imag) for either method. Ewald also
     supports ``output='pair'`` for (C(k), conj(C(-k))); see wotf_ewald for
@@ -25,7 +24,7 @@ def compute_wotf(
     """
     optics = dict(
         wavelength=wavelength, n_medium=n_medium,
-        source=source, pupil=pupil, dtype=dtype,
+        source=source, pupil=pupil,
     )
     if method == "fft":
         if output != "tfs":
@@ -45,7 +44,7 @@ def _predict_kernel(real_potential, imag_potential, h_real, h_imag):
     return jnp.fft.fftshift(jnp.fft.ifftn(spectrum)).real
 
 
-def predict_contrast(F_real, F_imag, H_real, H_imag, *, dtype=None):
+def predict_contrast(F_real, F_imag, H_real, H_imag):
     """Predict centered real c=(I-I0)/I0 with circular 3D convolution.
 
     All four arrays must share shape (nz, ny, nx). Spatial potentials are
@@ -54,8 +53,6 @@ def predict_contrast(F_real, F_imag, H_real, H_imag, *, dtype=None):
     do not multiply the result by dx*dy*dz. H already includes the required
     axial integration dz. Absolute intensity is I0*(1+c).
     """
-    real, complex_ = _precision(dtype)
-    with jax.enable_x64(real == jnp.float64):
-        fr, fi = jnp.asarray(F_real, real), jnp.asarray(F_imag, real)
-        hr, hi = jnp.asarray(H_real, complex_), jnp.asarray(H_imag, complex_)
-        return _predict_kernel(fr, fi, hr, hi)
+    fr, fi = jnp.asarray(F_real), jnp.asarray(F_imag)
+    hr, hi = jnp.asarray(H_real), jnp.asarray(H_imag)
+    return _predict_kernel(fr, fi, hr, hi)

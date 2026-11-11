@@ -5,17 +5,17 @@ import numpy as np
 import pytest
 
 from examples.validate_born import make_case
-from wotf import compute_wotf, precision, predict_contrast, wotf_ewald, wotf_fft
+from wotf import compute_wotf, predict_contrast, wotf_ewald, wotf_fft
 
 
 def test_ewald_pair():
     for shape in ((4, 15, 17), (17, 14, 18)):
-        fr, fi, spacing, optics = make_case(shape)  # asymmetric source, complex pupil
-        if shape[0] == 4:
-            spacing = (1.75, *spacing[1:])  # valid caps interpolate into the Nyquist bin
-        for dtype, complex_dtype in (("float64", "complex128"), ("float32", "complex64")):
-            with precision(dtype):
-                tolerance = 1e-12 if dtype == "float64" else 1e-4
+        for enabled, complex_dtype in ((True, "complex128"), (False, "complex64")):
+            with jax.enable_x64(enabled):
+                fr, fi, spacing, optics = make_case(shape)  # asymmetric source, complex pupil
+                if shape[0] == 4:
+                    spacing = (1.75, *spacing[1:])  # valid caps interpolate into the Nyquist bin
+                tolerance = 1e-12 if enabled else 1e-4
                 for axial in ("finite", "linear"):
                     pair = wotf_ewald(shape, spacing, **optics, axial=axial, output="pair")
                     via_entry = compute_wotf(shape, spacing, **optics, method="ewald", axial=axial, output="pair")
@@ -46,7 +46,7 @@ def test_ewald_pair():
                         hr, hi = wotf_fft(shape, spacing, **optics)
                         expected = np.asarray((hi + 1j * hr) / 2)
                         error = np.linalg.norm(np.asarray(cross) - expected) / np.linalg.norm(expected)
-                        assert error < tolerance, (shape, dtype, axial, error)
+                        assert error < tolerance, (shape, enabled, axial, error)
 
     with pytest.raises(ValueError, match='method="ewald"'):
         compute_wotf(shape, spacing, **optics, method="fft", output="pair")

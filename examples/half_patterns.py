@@ -12,46 +12,45 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
-from wotf import circular_pupil, compute_wotf, k_axes, precision
+from wotf import circular_pupil, compute_wotf, k_axes
 
 
-def run_example(dtype="float64", method="fft", axial="finite", output=Path("artifacts/half-patterns")):
+def run_example(method="fft", axial="finite", output=Path("artifacts/half-patterns")):
     """Return (selected-method WOTFs, linear Ewald WOTFs), keyed by pattern."""
     shape = (129, 129, 129)
     spacing = (0.35, 0.15, 0.15)  # sample-space (dz,dy,dx), um
     wavelength, n_medium = 0.53, 1.33
     na_outer, na_inner = 0.75, 0.5
 
-    with precision(dtype):
-        kz, ky, kx = k_axes(shape, spacing)
-        pupil = circular_pupil(ky, kx, wavelength=wavelength, na=na_outer)
-        radial2 = ky[:, None] ** 2 + kx[None, :] ** 2
-        half_disk = (pupil != 0) & (ky[:, None] >= 0)
-        half_annulus = half_disk & (radial2 >= (2 * jnp.pi * na_inner / wavelength) ** 2)
-        sources = {
-            "Half disk, NA 0-0.75": half_disk.astype(ky.dtype),
-            "Half annulus, NA 0.5-0.75": half_annulus.astype(ky.dtype),
-        }
-        transfers, linear_transfers = {}, {}
-        for name, source in sources.items():
-            transfers[name] = compute_wotf(
+    kz, ky, kx = k_axes(shape, spacing)
+    pupil = circular_pupil(ky, kx, wavelength=wavelength, na=na_outer)
+    radial2 = ky[:, None] ** 2 + kx[None, :] ** 2
+    half_disk = (pupil != 0) & (ky[:, None] >= 0)
+    half_annulus = half_disk & (radial2 >= (2 * jnp.pi * na_inner / wavelength) ** 2)
+    sources = {
+        "Half disk, NA 0-0.75": half_disk.astype(ky.dtype),
+        "Half annulus, NA 0.5-0.75": half_annulus.astype(ky.dtype),
+    }
+    transfers, linear_transfers = {}, {}
+    for name, source in sources.items():
+        transfers[name] = compute_wotf(
+            shape, spacing, wavelength=wavelength, n_medium=n_medium,
+            source=source, pupil=pupil, method=method, axial=axial,
+        )
+        if method == "ewald" and axial == "linear":
+            linear_transfers[name] = transfers[name]
+        else:
+            linear_transfers[name] = compute_wotf(
                 shape, spacing, wavelength=wavelength, n_medium=n_medium,
-                source=source, pupil=pupil, method=method, axial=axial,
+                source=source, pupil=pupil, method="ewald", axial="linear",
             )
-            if method == "ewald" and axial == "linear":
-                linear_transfers[name] = transfers[name]
-            else:
-                linear_transfers[name] = compute_wotf(
-                    shape, spacing, wavelength=wavelength, n_medium=n_medium,
-                    source=source, pupil=pupil, method="ewald", axial="linear",
-                )
-            h_real, h_imag = transfers[name]
-            background = jnp.sum(source * jnp.abs(pupil) ** 2)
-            # For a real pupil and an odd, symmetric axial lag grid, H_real
-            # is imaginary and H_imag is real. Report the unused components.
-            residual = max(float(jnp.max(jnp.abs(h_real.real))), float(jnp.max(jnp.abs(h_imag.imag))))
-            print(f"{name}: source modes={int(jnp.count_nonzero(source))}, I0={float(background):g}, "
-                  f"dtype={h_real.dtype}, other-component max={residual:.3e} um^2")
+        h_real, h_imag = transfers[name]
+        background = jnp.sum(source * jnp.abs(pupil) ** 2)
+        # For a real pupil and an odd, symmetric axial lag grid, H_real
+        # is imaginary and H_imag is real. Report the unused components.
+        residual = max(float(jnp.max(jnp.abs(h_real.real))), float(jnp.max(jnp.abs(h_imag.imag))))
+        print(f"{name}: source modes={int(jnp.count_nonzero(source))}, I0={float(background):g}, "
+              f"dtype={h_real.dtype}, other-component max={residual:.3e} um^2")
 
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
@@ -165,9 +164,8 @@ def _plot_transfers(path, axes_k, displayed, norms, kz_limit, lateral_limit, tit
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dtype", choices=("float32", "float64"), default="float64")
     parser.add_argument("--method", choices=("fft", "ewald"), default="fft")
     parser.add_argument("--axial", choices=("finite", "linear"), default="finite")
     parser.add_argument("--output", type=Path, default=Path("artifacts/half-patterns"))
     args = parser.parse_args()
-    run_example(args.dtype, args.method, args.axial, args.output)
+    run_example(method=args.method, axial=args.axial, output=args.output)

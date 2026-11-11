@@ -1,33 +1,35 @@
-"""Independent scalar Born fields versus FFT and finite Ewald predictions."""
+"""Independent double-precision Born fields versus WOTF predictions."""
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
 from examples.validate_born import born_stack, make_case
-from wotf import compute_wotf, precision, predict_contrast
+from wotf import compute_wotf, predict_contrast
 
 
 def test_against_scalar_born():
-    """Separate weak Gaussian F_real/F_imag; independent slice-integrated fields.
-
-    Periodic xy, five occupied specimen layers, nine central focus planes.
-    All focus-minus-specimen lags fit inside the padded 17-plane response.
-    Linear Ewald is approximate and is not subjected to the exact threshold.
-    """
-    with precision("float64"):
+    """Five occupied Gaussian layers, nine focus planes inside padded lags."""
+    # Only the test controls reference precision; neither model does so.
+    with jax.enable_x64(True):
         fr, fi, spacing, optics = make_case()
         zero = jnp.zeros_like(fr)
         focus = jnp.arange(-4, 5) * spacing[0]
-        cases = {"real": (fr, zero), "imag": (zero, fi), "mixed": (fr, fi)}
-        for channel, (real, imag) in cases.items():
-            # born_stack builds grids and propagates fields independently;
-            # it never calls a WOTF or its internal helpers.
-            reference = np.asarray(born_stack(real, imag, spacing, **optics, z_focus=focus)["linear_contrast"])
-            for dtype, tolerance in (("float64", 1e-10), ("float32", 1e-4)):
-                with precision(dtype):
-                    for method in ("fft", "ewald"):
-                        h = compute_wotf(fr.shape, spacing, **optics, method=method, axial="finite")
-                        prediction = np.asarray(predict_contrast(real, imag, *h))[4:13]
-                        error = np.linalg.norm(prediction - reference) / np.linalg.norm(reference)
-                        assert error < tolerance, (channel, dtype, method, error)
-                        print(f"Born {channel}, {dtype}, {method}: relative L2={error:.6e}")
+        cases = {"real": (np.asarray(fr), np.asarray(zero)),
+                 "imag": (np.asarray(zero), np.asarray(fi)),
+                 "mixed": (np.asarray(fr), np.asarray(fi))}
+        references = {
+            name: np.asarray(born_stack(real, imag, spacing, **optics, z_focus=focus)["linear_contrast"])
+            for name, (real, imag) in cases.items()
+        }
+        optics = optics | {"source": np.asarray(optics["source"]), "pupil": np.asarray(optics["pupil"])}
+
+    for enabled, tolerance in ((False, 1e-4), (True, 1e-10)):
+        with jax.enable_x64(enabled):
+            for channel, (real, imag) in cases.items():
+                for method in ("fft", "ewald"):
+                    h = compute_wotf(fr.shape, spacing, **optics, method=method, axial="finite")
+                    prediction = np.asarray(predict_contrast(real, imag, *h))[4:13]
+                    error = np.linalg.norm(prediction - references[channel]) / np.linalg.norm(references[channel])
+                    assert error < tolerance, (channel, enabled, method, error)
+                    print(f"Born {channel}, x64={enabled}, {method}: relative L2={error:.6e}")
